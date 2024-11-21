@@ -2,7 +2,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import numpy as np
-from torch.optim import Adam
+import torch.optim as optim
 
 class Encoder(nn.Module):
     """Actor State Encoder."""
@@ -61,7 +61,7 @@ class FNN(nn.Module):
 class ActorCritic(nn.Module):
     """Actor Critic Model."""
 
-    def __init__(self, obs_dim, action_dim, hidden_dim=64, lr=1e-5):
+    def __init__(self, obs_dim, action_dim, hidden_dim=64, lr=1e-5, gamma=0.99):
         """
             Initialize parameters and build model.
 
@@ -78,8 +78,11 @@ class ActorCritic(nn.Module):
         # Critic network (outputs value estimate)
         self.critic = FNN(obs_dim, 1, hidden_dim)
 
-        self.actor_optim = Adam(self.actor.parameters(), lr=lr)
-        self.critic_optim = Adam(self.critic.parameters(), lr=lr)
+        self.actor_optim = optim.Adam(self.actor.parameters(), lr=lr)
+        self.critic_optim = optim.Adam(self.critic.parameters(), lr=lr)
+
+        self.actor_scheduler= optim.lr_scheduler.StepLR(self.actor_optim, step_size = 1, gamma=gamma)
+        self.critic_scheduler= optim.lr_scheduler.StepLR(self.critic_optim, step_size = 1, gamma=gamma)
     
     def forward(self, obs):
         """Build a network that maps environment observation -> action probabilities + value estimate."""

@@ -3,7 +3,7 @@ import gym
 class LunarContinuous():
     """ OpenAi Lunar Continuous Environment. """
 
-    def __init__(self, render_mode = 'human'):
+    def __init__(self, render_mode = None):
         """
             Initialize parameters.
 
