@@ -13,7 +13,7 @@ import os
 class PPO:
     """PPO Algorithm Implementation."""
 
-    def __init__(self, env_mker = LunarContinuous(), model = None, policy_class = ActorCritic, **hyperparameters):
+    def __init__(self, summary_writter=None, env_mker = LunarContinuous(), policy_class = ActorCritic, **hyperparameters):
         """
 			Initializes the PPO model, including hyperparameters.
 
@@ -25,6 +25,7 @@ class PPO:
 		"""
 
         # Initialize hyperparameters for training with PPO
+        self.summary_writter = summary_writter
         self._init_hyperparameters(hyperparameters)
 
         # Extract environment information
@@ -33,13 +34,9 @@ class PPO:
         self.obs_dim =  self.env.observation_space.shape[0]
         self.act_dim =  self.env.action_space.shape[0]
 
-        # Initialize actor and critic networks
-        if model is None:
-            self.policy = policy_class(self.obs_dim, self.act_dim, lr=self.lr, gamma=self.lr_gamma)
-        else:
-            self.policy = model
-
+        
         # Initialize actor and critic
+        self.policy = policy_class(self.obs_dim, self.act_dim, lr=self.lr, gamma=self.lr_gamma)
         self.actor = self.policy.actor                                              
         self.critic = self.policy.critic
 
@@ -55,76 +52,67 @@ class PPO:
 
         self.logger = {
 			'delta_t': time.time_ns(),
-			't_so_far': 0,          # timesteps so far
-			'i_so_far': 0,          # iterations so far
-			'batch_lens': [],       # episodic lengths in batch
-			'batch_rews': [],       # episodic returns in batch
-			'actor_losses': [],     # losses of actor network in current iteration
-            'lr': self.lr
+			't_so_far': 0,          # timesteps simulated so far
+			'i_so_far': 0,          # iterations simulated so far
+			'batch_lens': [],       # episodic lengths in current batch
+			'batch_rews': [],       # episodic returns in current batch
+			'actor_losses': [],     # losses of actor network in current batch
+            'lr': self.lr           # current learning rate
 		}
 
-    def learn(self, total_timesteps):
+    def train(self, total_timesteps):
         """
             Train the actor/critic network.
 
             Parameters:
                 total_timesteps: the total number of timesteps to train for
         """
-        self.logger['delta_t'] = time.time_ns() # Reset time to allow multiple learning episodes
+        self.policy.train()
+        self.logger['delta_t'] = time.time_ns()
         t_sim = self.logger['t_so_far'] # Timesteps simulated so far
         iteration = self.logger['i_so_far']
 
         while t_sim < total_timesteps:   
-            batch_obs, batch_acts, batch_log_probs, batch_rtgs, batch_lens = self.rollout()
+            obs, acts, log_probs, rews, ep_lens, vals, dones = self.rollout()
 
-            t_sim += np.sum(batch_lens)
+            t_sim += np.sum(ep_lens)
             iteration += 1
 
             self.logger['t_so_far'] = t_sim
             self.logger['i_so_far'] = iteration
 
-            V, _ = self.evaluate(batch_obs, batch_acts)
+            V = self.critic(obs).squeeze()
 
             #Advanatage calculation
-            A_k = batch_rtgs - V.detach()
-            A_k = (A_k - A_k.mean()) / (A_k.std() + 1e-10)
+            A_k, returns = self.compute_gae(obs, rews, vals, dones)
 
             for _ in range(self.n_updates_per_iteration): 
-                # frac = (t_sim - 1.0) / total_timesteps
-                # new_lr = self.lr * (1.0 - frac)
-                
 
-                # # Make sure learning rate doesn't go below 0
-                # new_lr = max(new_lr, 0.0)
-                # self.logger['lr'] = new_lr
-                # self.actor_optim.param_groups[0]["lr"] = new_lr
-                # self.critic_optim.param_groups[0]["lr"] = new_lr
-
-                V, curr_log_probs = self.evaluate(batch_obs, batch_acts)
-                ratios = torch.exp(curr_log_probs - batch_log_probs)
+                V, curr_log_probs = self.evaluate(obs, acts)
+                ratios = torch.exp(curr_log_probs - log_probs)
 
                 #Calculate losses
                 surr1 = ratios * A_k
                 surr2 = torch.clamp(ratios, 1- self.clip, 1 + self.clip) * A_k
 
                 actor_loss = (-torch.min(surr1, surr2)).mean()
-                critic_loss = nn.MSELoss()(V, batch_rtgs)
+                critic_loss = nn.MSELoss()(V, returns)
 
                 #Backpropagate
                 self.actor_optim.zero_grad()
                 actor_loss.backward(retain_graph=True)
+                nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
                 self.actor_optim.step()
                 self.actor_scheduler.step()
-
+                
                 self.critic_optim.zero_grad()
                 critic_loss.backward()
                 self.critic_optim.step()
+                nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
                 self.critic_scheduler.step()
 
                 self.logger['actor_losses'].append(actor_loss.detach())
             self.logger['lr'] = self.actor_scheduler.get_last_lr()[0]
-            # self.actor_scheduler.step()
-            # self.critic_scheduler.step()
             self._log_summary()
 
 			# Save model every couple iterations
@@ -141,20 +129,26 @@ class PPO:
                 batch_obs: the observations collected this batch. Shape: (number of timesteps, dimension of observation)
                 batch_acts: the actions collected this batch. Shape: (number of timesteps, dimension of action)
                 batch_log_probs: the log probabilities of each action taken this batch. Shape: (number of timesteps)
-                batch_rtgs: the Rewards-To-Go of each timestep in this batch. Shape: (number of timesteps)
                 batch_lens: the lengths of each episode this batch. Shape: (number of episodes)
         """
         batch_obs = []
         batch_acts = []
         batch_log_probs = []
         batch_rews = []
-        batch_rtgs = []
         batch_lens = []
+        batch_vals = []
+        batch_dones = []
+
+        ep_rews = []
+        ep_vals = []
+        ep_dones = []
 
         t = 0
         while t < self.timesteps_per_batch:
 
             ep_rews = []
+            ep_vals = []
+            ep_dones = []
 
             obs, _ = self.env.reset()
             done = False
@@ -163,11 +157,15 @@ class PPO:
                 t+=1
 
                 batch_obs.append(obs)
+                ep_dones.append(done)
 
                 action, log_prob = self.get_action(obs)
-                obs, rew, done, _, _ = self.env.step(action)
+                val = self.critic(obs)
+                obs, rew, terminated, truncated, _ = self.env.step(action)
+                done = terminated or truncated
 
                 ep_rews.append(rew)
+                ep_vals.append(val.detach().flatten())
                 batch_acts.append(action)
                 batch_log_probs.append(log_prob)
 
@@ -176,41 +174,21 @@ class PPO:
             
             batch_lens.append(ep_t + 1)
             batch_rews.append(ep_rews)
+            batch_vals.append(ep_vals)
+            batch_dones.append(ep_dones)
 
         batch_obs = torch.tensor(np.array(batch_obs), dtype=torch.float)
         batch_acts = torch.tensor(np.array(batch_acts), dtype=torch.float)
         batch_log_probs = torch.tensor(np.array(batch_log_probs), dtype=torch.float)
-        batch_rtgs = self.compute_rtgs(batch_rews)     
 
         self.logger['batch_rews'] = batch_rews
         self.logger['batch_lens'] = batch_lens
 
-        return batch_obs, batch_acts, batch_log_probs, batch_rtgs, batch_lens
-      
-    def compute_rtgs(self, batch_rews):
-        """
-			Compute the Reward-To-Go of each timestep given the reawards of the batch.
-
-			Parameters:
-				batch_rews: the rewards in a batch, Shape: (number of episodes, number of timesteps per episode)
-
-			Return:
-				batch_rtgs: the rewards to go, Shape: (number of timesteps in batch)
-		"""
-        batch_rtgs = []
-
-        for ep_rews in reversed(batch_rews):
-            discounted_rew = 0
-
-            for rew in reversed(ep_rews):
-                discounted_rew = rew + discounted_rew*self.gamma
-                batch_rtgs.insert(0, discounted_rew)
-        
-        return torch.tensor(np.array(batch_rtgs), dtype=torch.float)
+        return batch_obs, batch_acts, batch_log_probs, batch_rews, batch_lens, batch_vals, batch_dones
     
     def get_action(self, obs):
         """
-            Queries an action from the actor/critic network.
+            Samples an action from the actor/critic network.
 
 			Parameters:
 				obs: the observation at the current timestep
@@ -251,6 +229,70 @@ class PPO:
 
         return values.squeeze(), log_probs
 
+    def compute_gae(self,  obs, rewards, values, dones):
+        advantages = []
+
+        for ep_rewards, ep_vals, ep_dones in zip(rewards, values, dones):
+            ep_advantages = []
+            last_advantage = 0.0
+            
+            for t in reversed(range(len(ep_vals))):
+                if t + 1 < len(ep_rewards):
+                    delta = ep_rewards[t] + self.gamma * ep_vals[t+1] * (1 - ep_dones[t+1]) - ep_vals[t]
+                else:
+                    delta = ep_rewards[t] - ep_vals[t]
+
+                advantage = delta + self.gamma * self.lam * (1 - ep_dones[t]) * last_advantage
+                last_advantage = advantage
+                ep_advantages.insert(0, advantage)
+
+            advantages.extend(ep_advantages)
+        
+        advantages = torch.tensor(advantages, dtype=torch.float)
+        returns = advantages + self.critic(obs).squeeze().detach()
+        normalized_advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-10)
+
+        return normalized_advantages, returns
+
+    def restore_savestate(self, checkpoint):
+        model = ActorCritic(self.obs_dim, self.act_dim)
+        model.load_state_dict(torch.load(checkpoint))
+        self.policy = model
+
+    def validate(self, max_iter, env = LunarContinuous().make_environment()):
+        self.policy.eval()
+        val_rews = []
+        val_dur = []
+        iter = 0
+        for _ in range(0, max_iter) :
+                obs, _ = env.reset()
+                done = False
+
+                t = 0
+                ep_ret = 0
+
+                while not done:
+                    t += 1
+                    action = self.actor(obs)
+                    obs, rew, terminated, truncated, _ = env.step(action.detach().numpy())
+                    done = terminated | truncated
+
+                    ep_ret += rew
+                    
+                val_rews.append(ep_ret)
+                val_dur.append(t)
+        return val_rews,  val_dur
+
+    def test(self, env = LunarContinuous(True).make_environment()):
+        self.policy.test()
+        while True:
+                obs, _ = env.reset()
+                done = False
+                while not done:
+                    action = self.actor(obs)
+                    obs, _, terminated, truncated, _ = env.step(action.detach().numpy())
+                    done = terminated | truncated
+
     def _init_hyperparameters(self, hyperparameters):
         """
             Initialize default and custom values for hyperparameters
@@ -265,14 +307,15 @@ class PPO:
         self.n_updates_per_iteration = 5                # Number of times to update actor/critic per iteration
         self.lr = 0.005                                 # Learning rate of actor optimizer
         self.gamma = 0.95                               # Discount factor to be applied when calculating Rewards-To-Go
-        self.clip = 0.2                                 # Recommended 0.2, helps define the threshold to clip the ratio during SGA
-        self.lr_gamma = 0.99
+        self.lam = 0.98                                 # Lambda Parameter for GAE 
+        self.clip = 0.2                                 # Using the recommended value of 0.2, helps define the threshold to clip the ratio during SGA
+        self.max_grad_norm = 0.5                        # Gradient Clipping threshold
+        self.lr_gamma = 0.9998
 
         # Miscellaneous parameters
         self.save_freq = 10                             # How often we save in number of iterations
         self.seed = None                                # Sets the seed of our program, used for reproducibility of results
         self.num_workers = 8                            # Sets the ammount of workers to parallelise rollouts
-        self.post_results = True                        # Whether to log the results to wanb
 
         # Change any default values to custom values for specified hyperparameters
         for param, val in hyperparameters.items():
@@ -302,8 +345,8 @@ class PPO:
         avg_actor_loss = np.mean([losses.float().mean() for losses in self.logger['actor_losses']])
 
         #log to wandb
-        if self.post_results:
-            wandb.log({
+        if self.summary_writter is not None:
+            self.summary_writter.save_dict({
                 "simulated_timesteps": t_so_far,
                 "simulated_iterations": i_so_far,
                 "average_episode_lengths": avg_ep_lens,
@@ -312,7 +355,7 @@ class PPO:
                 "learning_rate": lr
             })
 
-        # Round decimal places
+        # Round decimal places for prettier print
         avg_ep_lens = str(round(avg_ep_lens, 2))
         avg_ep_rews = str(round(avg_ep_rews, 2))
         avg_actor_loss = str(round(avg_actor_loss, 5))
