@@ -16,12 +16,6 @@ class PPO:
     def __init__(self, summary_writter=None, env_mker = LunarContinuous(), policy_class = ActorCritic, **hyperparameters):
         """
 			Initializes the PPO model, including hyperparameters.
-
-			Parameters:
-                env_mker: the class the creates the environment to train on
-				model: if should continue training on a pre-existing model
-                policy_class: the policy class to use for the actor/critic network
-				hyperparameters: all extra hyperparameters
 		"""
 
         # Initialize hyperparameters for training with PPO
@@ -63,9 +57,6 @@ class PPO:
     def train(self, total_timesteps):
         """
             Train the actor/critic network.
-
-            Parameters:
-                total_timesteps: the total number of timesteps to train for
         """
         self.policy.train()
         self.logger['delta_t'] = time.time_ns()
@@ -107,8 +98,8 @@ class PPO:
                 
                 self.critic_optim.zero_grad()
                 critic_loss.backward()
-                self.critic_optim.step()
                 nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
+                self.critic_optim.step()
                 self.critic_scheduler.step()
 
                 self.logger['actor_losses'].append(actor_loss.detach())
@@ -189,13 +180,6 @@ class PPO:
     def get_action(self, obs):
         """
             Samples an action from the actor/critic network.
-
-			Parameters:
-				obs: the observation at the current timestep
-
-			Return:
-				action: the action to take, as a numpy array
-				log_prob: the log probability of the selected action in the distribution
         """
         mean, _ = self.policy(obs)
 
@@ -208,19 +192,9 @@ class PPO:
 
     def evaluate(self, batch_obs, batch_acts):
         """
-            Estimate the values of each observation, and the log probs of
+            Estimates the values of each observation, and the log probs of
             each action in the most recent batch with the most recent
             iteration of the actor/critic network. 
-
-            Parameters:
-                batch_obs: the observations from the most recently collected batch as a tensor of
-                            shape: (number of timesteps in batch, dimension of observation)
-                batch_acts: the actions from the most recently collected batch as a tensor of
-                            shape: (number of timesteps in batch, dimension of action)
-
-            Return:
-                values: the predicted values of batch_obs
-                log_probs: the log probabilities of the actions taken in batch_acts given batch_obs
         """
         mean, values = self.policy(batch_obs)
 
@@ -230,6 +204,9 @@ class PPO:
         return values.squeeze(), log_probs
 
     def compute_gae(self,  obs, rewards, values, dones):
+        """
+            Computes the Generalized Advantage Estimation for the rollout data.
+        """
         advantages = []
 
         for ep_rewards, ep_vals, ep_dones in zip(rewards, values, dones):
@@ -296,33 +273,27 @@ class PPO:
     def _init_hyperparameters(self, hyperparameters):
         """
             Initialize default and custom values for hyperparameters
-
-            Parameters:
-                hyperparameters: the extra arguments included when creating the PPO model, should only include
-                                    hyperparameters defined below with custom values
         """
         # Algorithm hyperparameters
-        self.timesteps_per_batch = 4800                 # Number of timesteps to run per batch
+        self.timesteps_per_batch = 4800                 # Number of timesteps to run per rollout
         self.max_timesteps_per_episode = 1600           # Max number of timesteps per episode
-        self.n_updates_per_iteration = 5                # Number of times to update actor/critic per iteration
-        self.lr = 0.005                                 # Learning rate of actor optimizer
-        self.gamma = 0.95                               # Discount factor to be applied when calculating Rewards-To-Go
+        self.n_updates_per_iteration = 5                # Number of times to update policy per iteration
+        self.lr = 0.005                                 # Learning rate of policy optimizer
+        self.gamma = 0.999                              # Discount factor for the rewards
         self.lam = 0.98                                 # Lambda Parameter for GAE 
-        self.clip = 0.2                                 # Using the recommended value of 0.2, helps define the threshold to clip the ratio during SGA
+        self.clip = 0.2                                 # Clip ratio for ppo loss. Using recomended 0.2
         self.max_grad_norm = 0.5                        # Gradient Clipping threshold
         self.lr_gamma = 0.9998
 
-        # Miscellaneous parameters
-        self.save_freq = 10                             # How often we save in number of iterations
-        self.seed = None                                # Sets the seed of our program, used for reproducibility of results
-        self.num_workers = 8                            # Sets the ammount of workers to parallelise rollouts
+        # Misc parameters
+        self.save_freq = 10                             # How often to save in number of iterations
+        self.seed = None                                # Sets the seed 
+        self.num_workers = 8                            # Sets the ammount of workers to parallelize rollouts
 
-        # Change any default values to custom values for specified hyperparameters
         for param, val in hyperparameters.items():
             exec('self.' + param + ' = ' + str(val))
 
         if self.seed != None:
-            # Check if seed is valid first
             assert(type(self.seed) == int)
 
             torch.manual_seed(self.seed)
@@ -330,7 +301,7 @@ class PPO:
 
     def _log_summary(self):
         """
-            Print to stdout what we've logged so far in the most recent batch. Additionaly log data to wandb if flag is set.
+            Print to stdout the results for the most recent batch. Additionaly log data to wandb if applicable.
         """
         lr = self.logger['lr']
         delta_t = self.logger['delta_t']
@@ -355,7 +326,6 @@ class PPO:
                 "learning_rate": lr
             })
 
-        # Round decimal places for prettier print
         avg_ep_lens = str(round(avg_ep_lens, 2))
         avg_ep_rews = str(round(avg_ep_rews, 2))
         avg_actor_loss = str(round(avg_actor_loss, 5))
