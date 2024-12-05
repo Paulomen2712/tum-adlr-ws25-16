@@ -1,5 +1,6 @@
 import gym
 from gym.wrappers import RecordVideo
+from gym.vector import SyncVectorEnv
 class LunarContinuous():
     """ OpenAi Lunar Continuous Environment. """
 
@@ -20,3 +21,6 @@ class LunarContinuous():
     
     def make_environment_for_recording(self, episode_trigger=lambda x: True):
         return RecordVideo(gym.make('LunarLanderContinuous-v2', render_mode = 'rgb_array'), video_folder="videos", episode_trigger=episode_trigger)
+    
+    def make_environments(self, n_env):
+        return SyncVectorEnv([gym.make('LunarLanderContinuous-v2', render_mode = self.render_mode) for _ in range(n_env)]) 

@@ -64,7 +64,7 @@ class PPO:
         iteration = self.logger['i_so_far']
 
         while t_sim < total_timesteps:   
-            obs, acts, log_probs, rews, ep_lens, vals, dones = self.rollout()
+            obs, acts, log_probs, ep_lens, advantages = self.rollout()
 
             t_sim += np.sum(ep_lens)
             iteration += 1
@@ -72,34 +72,49 @@ class PPO:
             self.logger['t_so_far'] = t_sim
             self.logger['i_so_far'] = iteration
 
-            V = self.critic(obs).squeeze()
+            returns = advantages + self.critic(obs).squeeze().detach()
+            A_k = (advantages - advantages.mean()) / (advantages.std() + 1e-10)
 
-            #Advanatage calculation
-            A_k, returns = self.compute_gae(obs, rews, vals, dones)
+            batch_size = obs.size(0)
+            inds = np.arange(batch_size)
+            sgdbatch_size = batch_size // self.n_sgd_batches
 
             for _ in range(self.n_updates_per_iteration): 
 
-                V, curr_log_probs = self.evaluate(obs, acts)
-                ratios = torch.exp(curr_log_probs - log_probs)
+                np.random.shuffle(inds)
+                #SGD
+                for start in range(0, batch_size, sgdbatch_size):
+                    end = start + sgdbatch_size
+                    idx = inds[start:end]
+                    
+                    #Restrict data to current batch
+                    batch_obs = obs[idx]
+                    batch_acts = acts[idx]
+                    batch_log_probs = log_probs[idx]
+                    batch_advantages = A_k[idx]
+                    batch_returns = returns[idx]
+                    V, predicted_batch_log_probs = self.evaluate(batch_obs, batch_acts)
+                    ratios = torch.exp(predicted_batch_log_probs - batch_log_probs)
 
-                #Calculate losses
-                surr1 = ratios * A_k
-                surr2 = torch.clamp(ratios, 1- self.clip, 1 + self.clip) * A_k
+                    #Calculate losses
+                    surr1 = ratios * batch_advantages
+                    surr2 = torch.clamp(ratios, 1 - self.clip, 1 + self.clip) * batch_advantages
 
-                actor_loss = (-torch.min(surr1, surr2)).mean()
-                critic_loss = nn.MSELoss()(V, returns)
+                    actor_loss = (-torch.min(surr1, surr2)).mean()
+                    critic_loss = nn.MSELoss()(V, batch_returns)
 
-                #Backpropagate
-                self.actor_optim.zero_grad()
-                actor_loss.backward(retain_graph=True)
-                nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
-                self.actor_optim.step()
+                    #Backprop
+                    self.actor_optim.zero_grad()
+                    actor_loss.backward(retain_graph=True)
+                    nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
+                    self.actor_optim.step()
+                    
+                    self.critic_optim.zero_grad()
+                    critic_loss.backward()
+                    nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
+                    self.critic_optim.step()
+
                 self.actor_scheduler.step()
-                
-                self.critic_optim.zero_grad()
-                critic_loss.backward()
-                nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
-                self.critic_optim.step()
                 self.critic_scheduler.step()
 
                 self.logger['actor_losses'].append(actor_loss.detach())
@@ -107,7 +122,7 @@ class PPO:
             self._log_summary()
 
 			# Save model every couple iterations
-            if iteration % self.save_freq == 0:
+            if self.save_freq > 0 and iteration % self.save_freq == 0:
                 save_path = f'./ppo_parallel_checkpoints/{wandb.run.name}/ppo_policy_{iteration}.pth'
                 os.makedirs(os.path.dirname(save_path), exist_ok=True)
                 torch.save(self.policy.state_dict(), save_path)
@@ -129,6 +144,7 @@ class PPO:
         batch_lens = []
         batch_vals = []
         batch_dones = []
+        batch_advantages = []
 
         ep_rews = []
         ep_vals = []
@@ -150,13 +166,12 @@ class PPO:
                 batch_obs.append(obs)
                 ep_dones.append(done)
 
-                action, log_prob = self.get_action(obs)
-                val = self.critic(obs)
+                action, log_prob, val = self.get_action(obs)
                 obs, rew, terminated, truncated, _ = self.env.step(action)
                 done = terminated or truncated
 
                 ep_rews.append(rew)
-                ep_vals.append(val.detach().flatten())
+                ep_vals.append(val.flatten())
                 batch_acts.append(action)
                 batch_log_probs.append(log_prob)
 
@@ -167,7 +182,9 @@ class PPO:
             batch_rews.append(ep_rews)
             batch_vals.append(ep_vals)
             batch_dones.append(ep_dones)
+            batch_advantages.extend(self.gae(ep_rews, ep_vals, ep_dones))
 
+        batch_advantages = torch.tensor(batch_advantages, dtype=torch.float)
         batch_obs = torch.tensor(np.array(batch_obs), dtype=torch.float)
         batch_acts = torch.tensor(np.array(batch_acts), dtype=torch.float)
         batch_log_probs = torch.tensor(np.array(batch_log_probs), dtype=torch.float)
@@ -175,20 +192,20 @@ class PPO:
         self.logger['batch_rews'] = batch_rews
         self.logger['batch_lens'] = batch_lens
 
-        return batch_obs, batch_acts, batch_log_probs, batch_rews, batch_lens, batch_vals, batch_dones
+        return batch_obs, batch_acts, batch_log_probs, batch_lens, batch_advantages
     
     def get_action(self, obs):
         """
             Samples an action from the actor/critic network.
         """
-        mean, _ = self.policy(obs)
+        mean, values = self.policy(obs)
 
         dist = MultivariateNormal(mean, self.cov_mat)
 
         action = dist.sample()
         log_prob = dist.log_prob(action)
 
-        return action.detach().numpy(), log_prob.detach()
+        return action.detach().numpy(), log_prob.detach(), values.detach()
 
     def evaluate(self, batch_obs, batch_acts):
         """
@@ -203,33 +220,20 @@ class PPO:
 
         return values.squeeze(), log_probs
 
-    def compute_gae(self,  obs, rewards, values, dones):
-        """
-            Computes the Generalized Advantage Estimation for the rollout data.
-        """
+    def gae(self, rewards, vals, dones):
         advantages = []
-
-        for ep_rewards, ep_vals, ep_dones in zip(rewards, values, dones):
-            ep_advantages = []
-            last_advantage = 0.0
-            
-            for t in reversed(range(len(ep_vals))):
-                if t + 1 < len(ep_rewards):
-                    delta = ep_rewards[t] + self.gamma * ep_vals[t+1] * (1 - ep_dones[t+1]) - ep_vals[t]
-                else:
-                    delta = ep_rewards[t] - ep_vals[t]
-
-                advantage = delta + self.gamma * self.lam * (1 - ep_dones[t]) * last_advantage
-                last_advantage = advantage
-                ep_advantages.insert(0, advantage)
-
-            advantages.extend(ep_advantages)
+        last_advantage = 0.0
         
-        advantages = torch.tensor(advantages, dtype=torch.float)
-        returns = advantages + self.critic(obs).squeeze().detach()
-        normalized_advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-10)
+        for t in reversed(range(len(vals))):
+            if t + 1 < len(rewards):
+                delta = rewards[t] + self.gamma * vals[t+1] * (1 - dones[t+1]) - vals[t]
+            else:
+                delta = rewards[t] - vals[t]
 
-        return normalized_advantages, returns
+            advantage = delta + self.gamma * self.lam * (1 - dones[t]) * last_advantage
+            last_advantage = advantage
+            advantages.insert(0, advantage)
+        return advantages
 
     def restore_savestate(self, checkpoint):
         model = ActorCritic(self.obs_dim, self.act_dim)
@@ -240,7 +244,6 @@ class PPO:
         self.policy.eval()
         val_rews = []
         val_dur = []
-        iter = 0
         for _ in range(0, max_iter) :
                 obs, _ = env.reset()
                 done = False
@@ -282,8 +285,9 @@ class PPO:
         self.gamma = 0.999                              # Discount factor for the rewards
         self.lam = 0.98                                 # Lambda Parameter for GAE 
         self.clip = 0.2                                 # Clip ratio for ppo loss. Using recomended 0.2
-        self.max_grad_norm = 0.5                        # Gradient Clipping threshold
-        self.lr_gamma = 0.9998
+        self.max_grad_norm = 0.5                        # Gradient clipping threshold
+        self.lr_gamma = 0.9998                          # Gamma for scheduler
+        self.n_sgd_batches = 1                          # Number of batches for sgd
 
         # Misc parameters
         self.save_freq = 10                             # How often to save in number of iterations
