@@ -81,30 +81,42 @@ class ActorCritic(nn.Module):
         self.actor_optim = optim.Adam(self.actor.parameters(), lr=lr)
         self.critic_optim = optim.Adam(self.critic.parameters(), lr=lr)
 
-        self.actor_scheduler= optim.lr_scheduler.StepLR(self.actor_optim, step_size = 1, gamma=gamma)
-        self.critic_scheduler= optim.lr_scheduler.StepLR(self.critic_optim, step_size = 1, gamma=gamma)
-        # scheduler_lambda = lambda epoch: gamma ** epoch
-        # self.actor_scheduler= optim.lr_scheduler.LambdaLR(self.actor_optim, lr_lambda=scheduler_lambda)
-        # self.critic_scheduler= optim.lr_scheduler.LambdaLR(self.critic_optim, lr_lambda=scheduler_lambda)
+        # self.actor_scheduler= optim.lr_scheduler.StepLR(self.actor_optim, step_size = 1, gamma=gamma)
+        # self.critic_scheduler= optim.lr_scheduler.StepLR(self.critic_optim, step_size = 1, gamma=gamma)
+        scheduler_lambda = lambda epoch: gamma ** epoch
+        self.actor_scheduler= optim.lr_scheduler.LambdaLR(self.actor_optim, lr_lambda=scheduler_lambda)
+        self.critic_scheduler= optim.lr_scheduler.LambdaLR(self.critic_optim, lr_lambda=scheduler_lambda)
 
     
     def forward(self, obs):
-        """Build a network that maps environment observation -> action probabilities + value estimate."""
-        # Policy actions
-        actions = self.actor(obs)
+        """
+            Build a network that maps environment observation -> action probabilities + value estimate.
+        """
         
-        # State value estimate
+        actions = self.actor(obs)
         critic = self.critic(obs)
         
         return actions, critic
     
     def store_savestate(self, checkpoint_path):
         checkpoint = {
-        'actor_state_dict': self.actor.state_dict(),
-        'critic_state_dict': self.actor.state_dict()
+            'actor_state_dict': self.actor.state_dict(),
+            'critic_state_dict': self.critic.state_dict(),
+            'actor_optimizer_state_dict': self.actor_optim.state_dict(),
+            'critic_optimizer_state_dict': self.critic_optim.state_dict(),
+            'actor_scheduler_state_dict': self.actor_scheduler.state_dict(),
+            'critic_scheduler_state_dict': self.critic_scheduler.state_dict()
         }
-        torch.save(checkpoint_path, "checkpoint.pth")
+        torch.save(checkpoint, checkpoint_path)
+        print(f"Checkpoint saved at {checkpoint_path}")
 
 
     def restore_savestate(self, checkpoint_path):
-        pass
+        checkpoint = torch.load(checkpoint_path)
+        self.actor.load_state_dict(checkpoint['actor_state_dict'])
+        self.critic.load_state_dict(checkpoint['critic_state_dict'])
+        self.actor_optim.load_state_dict(checkpoint['actor_optimizer_state_dict'])
+        self.critic_optim.load_state_dict(checkpoint['critic_optimizer_state_dict'])
+        self.actor_scheduler.load_state_dict(checkpoint['actor_scheduler_state_dict'])
+        self.critic_scheduler.load_state_dict(checkpoint['critic_scheduler_state_dict'])
+        print(f"Checkpoint restored from {checkpoint_path}")

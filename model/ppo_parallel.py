@@ -13,7 +13,7 @@ import os
 class PPO:
     """PPO Algorithm Implementation."""
 
-    def __init__(self, summary_writter=None, env_mker = LunarContinuous(), policy_class = ActorCritic, **hyperparameters):
+    def __init__(self, summary_writter=None, env = LunarContinuous, policy_class = ActorCritic, **hyperparameters):
         """
 			Initializes the PPO model, including hyperparameters.
 		"""
@@ -23,10 +23,8 @@ class PPO:
         self._init_hyperparameters(hyperparameters)
 
         # Extract environment information
-        self.env_mker = env_mker
-        self.env = self.env_mker.make_environment()
-        self.obs_dim =  self.env.observation_space.shape[0]
-        self.act_dim =  self.env.action_space.shape[0]
+        self.env = env()
+        self.obs_dim, self.act_dim =  self.env.get_environment_shape()
 
         
         # Initialize actor and critic
@@ -123,9 +121,9 @@ class PPO:
 
 			# Save model every couple iterations
             if self.save_freq > 0 and iteration % self.save_freq == 0:
-                save_path = f'./ppo_parallel_checkpoints/{wandb.run.name}/ppo_policy_{iteration}.pth'
+                save_path = self._get_save_path(iteration)
                 os.makedirs(os.path.dirname(save_path), exist_ok=True)
-                torch.save(self.policy.state_dict(), save_path)
+                self.policy.store_savestate(save_path)
 
     def rollout(self):
         """
@@ -157,8 +155,7 @@ class PPO:
             ep_vals = []
             ep_dones = []
 
-            obs, _ = self.env.reset()
-            done = False
+            obs, done = self.env.reset()
 
             for ep_t in range(self.max_timesteps_per_episode):
                 t+=1
@@ -167,8 +164,7 @@ class PPO:
                 ep_dones.append(done)
 
                 action, log_prob, val = self.get_action(obs)
-                obs, rew, terminated, truncated, _ = self.env.step(action)
-                done = terminated or truncated
+                obs, rew, done = self.env.step(action)
 
                 ep_rews.append(rew)
                 ep_vals.append(val.flatten())
@@ -237,16 +233,20 @@ class PPO:
 
     def restore_savestate(self, checkpoint):
         model = ActorCritic(self.obs_dim, self.act_dim)
-        model.load_state_dict(torch.load(checkpoint))
+        model.restore_savestate(checkpoint)
         self.policy = model
 
-    def validate(self, max_iter, env = LunarContinuous().make_environment()):
+    def validate(self, max_iter, should_record=False, env_class=LunarContinuous):
         self.policy.eval()
+        if should_record:
+            env = env_class()
+            env.make_environment_for_recording()
+        else:
+            env = env_class(render_mode = 'human')
         val_rews = []
         val_dur = []
         for _ in range(0, max_iter) :
-                obs, _ = env.reset()
-                done = False
+                obs, done = env.reset()
 
                 t = 0
                 ep_ret = 0
@@ -254,8 +254,7 @@ class PPO:
                 while not done:
                     t += 1
                     action = self.actor(obs)
-                    obs, rew, terminated, truncated, _ = env.step(action.detach().numpy())
-                    done = terminated | truncated
+                    obs, rew, done = env.step(action.detach().numpy())
 
                     ep_ret += rew
                     
@@ -263,15 +262,14 @@ class PPO:
                 val_dur.append(t)
         return val_rews,  val_dur
 
-    def test(self, env = LunarContinuous(True).make_environment()):
+    def test(self, env_class=LunarContinuous):
         self.policy.test()
+        env = env_class(render_mode='human')
         while True:
-                obs, _ = env.reset()
-                done = False
+                obs, done = env.reset()
                 while not done:
                     action = self.actor(obs)
-                    obs, _, terminated, truncated, _ = env.step(action.detach().numpy())
-                    done = terminated | truncated
+                    obs, _, done = env.step(action.detach().numpy())
 
     def _init_hyperparameters(self, hyperparameters):
         """
@@ -302,6 +300,12 @@ class PPO:
 
             torch.manual_seed(self.seed)
             print(f"Successfully set seed to {self.seed}")
+
+    def _get_save_path(self, iteration):
+        if self.summary_writter is None:
+            return f'./ppo_checkpoints/non_wandb/ppo_policy_{iteration}.pth'
+        else:
+            return f'./ppo_checkpoints/{wandb.run.name}/ppo_policy_{iteration}.pth'
 
     def _log_summary(self):
         """

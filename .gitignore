@@ -1,2 +1,3 @@
 **/wandb
+**/ppo_parallel_checkpoints
 **/__pycache__
