@@ -5,18 +5,12 @@ import numpy as np
 import torch.optim as optim
 
 class Encoder(nn.Module):
-    """Actor State Encoder."""
+    """ Actor State Encoder. """
 
     def __init__(self, state_size, latent_size, seed, fc1_units=128, fc2_units=64):
         """
             Initialize parameters and build model.
 
-            Parameters:
-                state_size (int): Dimension of each state
-                latent_size (int): Dimension of the latent space
-                seed (int): Random seed
-                fc1_units (int): Number of nodes in first hidden layer
-                fc2_units (int): Number of nodes in second hidden layer
         """
         super(Encoder, self).__init__()
         self.seed = torch.manual_seed(seed)
@@ -25,22 +19,19 @@ class Encoder(nn.Module):
         self.fc3 = nn.Linear(fc2_units, latent_size)
 
     def forward(self, state):
-        """Build a network that maps state -> latent representation."""
+        """
+            Build a network that maps state -> latent representation.
+        """
         x = F.relu(self.fc1(state))
         x = F.relu(self.fc2(x))
         return self.fc3(x)
 
 class FNN(nn.Module):
-    """Fully connected feedforward network with a hidden layer. """
+    """ Fully connected feedforward network with a hidden layer. """
 
     def __init__(self, input_dim, output_dim, hidden_dim=64):
         """
             Initialize parameters and build model.
-
-            Parameters:
-                input_dim (int): Dimension of the input
-                output_dim (int): Dimension of the output
-                hidden_dim (int): Number of nodes in the hidden layer
         """
         super(FNN, self).__init__()
 		
@@ -59,16 +50,11 @@ class FNN(nn.Module):
         return output
     
 class ActorCritic(nn.Module):
-    """Actor Critic Model."""
+    """ Actor Critic Model."""
 
     def __init__(self, obs_dim, action_dim, hidden_dim=64, lr=1e-5, gamma=0.99):
         """
             Initialize parameters and build model.
-
-            Parameters:
-                obs_dim (int): Dimension of the observation space
-                action_dim (int): Dimension of the action space
-                hidden_dim (int): Number of nodes in the hidden layer
         """
         super(ActorCritic, self).__init__()
         
@@ -99,6 +85,9 @@ class ActorCritic(nn.Module):
         return actions, critic
     
     def store_savestate(self, checkpoint_path):
+        """
+            Stores the model into the given directory.
+        """
         checkpoint = {
             'actor_state_dict': self.actor.state_dict(),
             'critic_state_dict': self.critic.state_dict(),
@@ -112,6 +101,9 @@ class ActorCritic(nn.Module):
 
 
     def restore_savestate(self, checkpoint_path):
+        """
+            Loads the model from the given directory.
+        """
         checkpoint = torch.load(checkpoint_path)
         self.actor.load_state_dict(checkpoint['actor_state_dict'])
         self.critic.load_state_dict(checkpoint['critic_state_dict'])

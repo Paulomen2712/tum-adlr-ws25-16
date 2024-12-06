@@ -5,6 +5,7 @@ import numpy as np
 import math
 
 class Environment(gym.Wrapper):
+    """ Base class for wrapping environments. """
     def __init__(self, **args):
         """
             Initialize parameters.
@@ -31,6 +32,9 @@ class Environment(gym.Wrapper):
         pass  # Placeholder for environment-specific implementation
     
     def make_environment_for_recording(self, episode_trigger=lambda _: True):
+        """
+            Additionally wraps the environment for recording.
+        """
         self.env = RecordVideo(self._make_environment(render_mode = 'rgb_array'), video_folder="videos", episode_trigger=episode_trigger)
 
 class LunarContinuous(Environment):
@@ -47,7 +51,6 @@ class LunarContinuous(Environment):
 
     def _make_environment(self, **args):
         return LunarLander(continuous=True, **args)
-        # return gym.make('LunarLanderContinuous-v2', render_mode=None)
     
     def get_environment_shape(self):
         return self.env.observation_space.shape[0], self.env.action_space.shape[0]
@@ -63,6 +66,7 @@ class LunarContinuous(Environment):
         return obs, reward, done
     
 class LunarLanderWithUnknownWind(LunarContinuous):
+    """ OpenAi Lunar Continuous Environment Wrapper with wind enabled environment wrapper. """
     def __init__(self, **args):
         super().__init__(**args)
 
@@ -70,6 +74,9 @@ class LunarLanderWithUnknownWind(LunarContinuous):
         return LunarLanderWithWind(**args)
     
 class LunarLanderWithKnownWind(LunarLanderWithUnknownWind):
+    """
+        OpenAi Lunar Continuous Environment Wrapper that adds the wind to the observation space.
+    """
     def __init__(self, **args):
         super().__init__(**args)
     
@@ -86,7 +93,7 @@ class LunarLanderWithKnownWind(LunarLanderWithUnknownWind):
 
 class LunarLanderWithWind(LunarLander):
     """
-    Custom LunarLander environment with wind turbulence.
+        Custom LunarLander environment with wind turbulence.
     """
 
     def __init__(self, max_wind_power=15.0, render_mode=None):
@@ -101,6 +108,7 @@ class LunarLanderWithWind(LunarLander):
                     math.sin(0.02 * self.wind_idx)
                     + (math.sin(math.pi * 0.01 * self.wind_idx))
                 )* self.wind_power
+        #return self.wind_power
 
     def reset(self):
         """

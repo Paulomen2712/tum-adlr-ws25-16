@@ -78,9 +78,8 @@ class PPO:
             sgdbatch_size = batch_size // self.n_sgd_batches
 
             for _ in range(self.n_updates_per_iteration): 
-
-                np.random.shuffle(inds)
                 #SGD
+                np.random.shuffle(inds)
                 for start in range(0, batch_size, sgdbatch_size):
                     end = start + sgdbatch_size
                     idx = inds[start:end]
@@ -112,6 +111,7 @@ class PPO:
                     nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
                     self.critic_optim.step()
 
+                #Update learning rate
                 self.actor_scheduler.step()
                 self.critic_scheduler.step()
 
@@ -134,6 +134,7 @@ class PPO:
                 batch_acts: the actions collected this batch. Shape: (number of timesteps, dimension of action)
                 batch_log_probs: the log probabilities of each action taken this batch. Shape: (number of timesteps)
                 batch_lens: the lengths of each episode this batch. Shape: (number of episodes)
+                batch_advantages: the advantages collected from this batchShape: (number of timesteps)
         """
         batch_obs = []
         batch_acts = []
@@ -206,8 +207,7 @@ class PPO:
     def evaluate(self, batch_obs, batch_acts):
         """
             Estimates the values of each observation, and the log probs of
-            each action in the most recent batch with the most recent
-            iteration of the actor/critic network. 
+            each action given the batch observations and actions. 
         """
         mean, values = self.policy(batch_obs)
 
@@ -217,6 +217,9 @@ class PPO:
         return values.squeeze(), log_probs
 
     def gae(self, rewards, vals, dones):
+        """
+            Computes generalized advantage estimation (see https://arxiv.org/abs/1506.02438 page 4)
+        """
         advantages = []
         last_advantage = 0.0
         
@@ -290,7 +293,6 @@ class PPO:
         # Misc parameters
         self.save_freq = 10                             # How often to save in number of iterations
         self.seed = None                                # Sets the seed 
-        self.num_workers = 8                            # Sets the ammount of workers to parallelize rollouts
 
         for param, val in hyperparameters.items():
             exec('self.' + param + ' = ' + str(val))
