@@ -3,7 +3,22 @@ from dataclasses import asdict
 import wandb
 
 class SummaryWritter():
-    pass
+    def log(self, cur_iteration):
+        pass
+        # avg_ep_lens = str(round(avg_ep_lens, 2))
+        # avg_ep_rews = str(round(avg_ep_rews, 2))
+        # avg_actor_loss = str(round(avg_actor_loss, 5))
+
+        # print(flush=True)
+        # print(f"-------------------- Iteration #{i_so_far} --------------------", flush=True)
+        # print(f"Average Episodic Length: {avg_ep_lens}", flush=True)
+        # print(f"Average Episodic Return: {avg_ep_rews}", flush=True)
+        # print(f"Average Loss: {avg_actor_loss}", flush=True)
+        # print(f"Timesteps So Far: {t_so_far}", flush=True)
+        # print(f"Iteration took: {delta_t} secs", flush=True)
+        # print(f"Current learning rate: {lr}", flush=True)
+        # print(f"------------------------------------------------------", flush=True)
+        # print(flush=True)
 
 class WandbSummaryWritter():
     """Logger for wandb.com"""

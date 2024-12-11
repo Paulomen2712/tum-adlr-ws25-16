@@ -43,7 +43,7 @@ class PPO:
 			't_so_far': 0,          # timesteps simulated so far
 			'i_so_far': 0,          # iterations simulated so far
 			'batch_lens': [],       # episodic lengths in current batch
-			'batch_rews': [],       # episodic returns in current batch
+			'batch_rews': 0,       # episodic returns in current batch
 			'actor_losses': [],     # losses of actor network in current batch
             'kls': [],
             'lr': self.lr           # current learning rate
@@ -58,16 +58,14 @@ class PPO:
         t_sim = self.logger['t_so_far'] # Timesteps simulated so far
         iteration = self.logger['i_so_far']
 
-        while t_sim < total_timesteps:   
-            obs, acts, log_probs, ep_lens, advantages = self.rollout()
-
-            t_sim += np.sum(ep_lens)
+        for t in range(0, 10000):   
+            obs, acts, log_probs, advantages = self.rollout()
             iteration += 1
 
             self.logger['t_so_far'] = t_sim
             self.logger['i_so_far'] = iteration
 
-            returns = advantages + self.policy.get_value(obs).squeeze()
+            returns = advantages + self.policy.get_value(obs)
             A_k = (advantages - advantages.mean()) / (advantages.std() + 1e-10)
 
             batch_size = obs.size(0)
@@ -132,61 +130,64 @@ class PPO:
                 batch_lens: the lengths of each episode this batch. Shape: (number of episodes)
                 batch_advantages: the advantages collected from this batchShape: (number of timesteps)
         """
-        batch_obs = []
-        batch_acts = []
-        batch_log_probs = []
-        batch_rews = []
-        batch_lens = []
-        batch_vals = []
-        batch_dones = []
-        batch_advantages = []
+        self.num_envs = 1
+        self.num_steps= 1200
+        self.storage_size = 20
 
-        ep_rews = []
-        ep_vals = []
-        ep_dones = []
+        device = 'cpu'
 
-        t = 0
-        while t < self.timesteps_per_batch:
+        obs = torch.zeros((self.storage_size, self.num_steps, self.num_envs, self.obs_dim))#.to(device)
+        actions = torch.zeros((self.storage_size,self.num_steps, self.num_envs, self.act_dim))#.to(device)
+        logprobs = torch.zeros((self.storage_size,self.num_steps, self.num_envs, 1))#.to(device)
+        rewards = torch.zeros((self.storage_size,self.num_steps, self.num_envs, 1))#.to(device)
+        dones = torch.zeros((self.storage_size,self.num_steps, self.num_envs, 1))#.to(device)
+        values = torch.zeros((self.storage_size, self.num_steps, self.num_envs, 1))#.to(device)
 
-            ep_rews = []
-            ep_vals = []
-            ep_dones = []
+        global_step = 0
+        start_time = time.time()
+        # next_obs = torch.Tensor(self.env.reset()).to(device)
+        # next_done = torch.zeros(self.num_envs).to(device)
+        next_obs, next_done = self.env.reset()
+        next_obs, next_done = torch.Tensor(next_obs), torch.Tensor([float(next_done)])#.to(device)
+        for i in range(0,self.storage_size):
 
-            obs, done = self.env.reset()
+            # ep_rews = []
+            # ep_vals = []
+            # ep_dones = []
 
-            for ep_t in range(self.max_timesteps_per_episode):
-                t+=1
+            # obs, done = self.env.reset()
 
-                batch_obs.append(obs)
-                ep_dones.append(done)
+            for step in range(self.num_steps):
+                obs[i,step] = next_obs
+                dones[i,step] = next_done
 
-                action, log_prob, val = self.policy.act(obs)
-                obs, rew, done = self.env.step(action)
+                action, logprob, val = self.policy.act(next_obs)
+                next_obs, rew, next_done = self.env.step(action)
 
-                ep_rews.append(rew)
-                ep_vals.append(val.flatten())
-                batch_acts.append(action)
-                batch_log_probs.append(log_prob)
 
-                if done:
-                    break
+                values[i,step] = val.flatten()
+                actions[i,step] = torch.Tensor(action)#.to(device)
+                logprobs[i,step] = logprob
+                rewards[i,step] = torch.tensor(rew).view(-1)
+                next_obs, next_done = torch.Tensor(next_obs), torch.Tensor([float(next_done)])#.to(device)
             
-            batch_lens.append(ep_t + 1)
-            batch_rews.append(ep_rews)
-            batch_vals.append(ep_vals)
-            batch_dones.append(ep_dones)
-            batch_advantages.extend(self.gae(ep_rews, ep_vals, ep_dones))
+            # batch_advantages.extend(self.gae(ep_rews, ep_vals, ep_dones))
 
-        batch_advantages = torch.tensor(batch_advantages, dtype=torch.float)
-        batch_obs = torch.tensor(np.array(batch_obs), dtype=torch.float)
-        batch_acts = torch.tensor(np.array(batch_acts), dtype=torch.float)
-        batch_log_probs = torch.tensor(np.array(batch_log_probs), dtype=torch.float)
+        
 
-        self.logger['batch_rews'] = batch_rews
-        self.logger['batch_lens'] = batch_lens
+        # batch_advantages = torch.tensor(batch_advantages, dtype=torch.float)
+        # batch_obs = torch.tensor(np.array(batch_obs), dtype=torch.float)
+        # batch_acts = torch.tensor(np.array(batch_acts), dtype=torch.float)
+        # batch_log_probs = torch.tensor(np.array(batch_log_probs), dtype=torch.float)
 
-        return batch_obs, batch_acts, batch_log_probs, batch_lens, batch_advantages
+        self.logger['batch_rews'] = torch.mean(rewards)
+        # self.logger['batch_lens'] = batch_lens
+
+        return self.format_tensor(obs), self.format_tensor(actions), self.format_tensor(logprobs), self.format_tensor(self.gae(rewards, values, dones))
     
+    def format_tensor(self, tensor):
+        return tensor.transpose(1, 2).flatten(start_dim=0, end_dim=1)
+
     def update_actor(self, pred_log_probs, log_probs, advantages):
         log_ratios = pred_log_probs - log_probs
         ratios = torch.exp(log_ratios)
@@ -203,30 +204,37 @@ class PPO:
         return actor_loss.detach(), kl
 
     def update_critic(self,  values, returns):
-        critic_loss = nn.MSELoss()(values, returns)
+        critic_loss = nn.MSELoss()(values.squeeze(), returns.squeeze())
         
         self.critic_optim.zero_grad()
         critic_loss.backward()
         nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
         self.critic_optim.step()
 
-    def gae(self, rewards, vals, dones):
+    def gae(self, rewards, values, dones):
         """
             Computes generalized advantage estimation (see https://arxiv.org/abs/1506.02438 page 4)
         """
-        advantages = []
-        last_advantage = 0.0
-        
-        for t in reversed(range(len(vals))):
-            if t + 1 < len(rewards):
-                delta = rewards[t] + self.gamma * vals[t+1] * (1 - dones[t+1]) - vals[t]
-            else:
-                delta = rewards[t] - vals[t]
+        device='cpu'
+        advantages = torch.zeros_like(rewards)#.to(device)
 
-            advantage = delta + self.gamma * self.lam * (1 - dones[t]) * last_advantage
-            last_advantage = advantage
-            advantages.insert(0, advantage)
-        return advantages
+        # Add one additional step value for bootstrap
+        values_next = torch.zeros_like(values)#.to(device)
+        values_next[:, :-1] = values[:, 1:]  # Next values shifted for GAE
+        values_next[:, -1] = values[:, -1]  # Bootstrap with last value
+
+        # Compute deltas (TD residuals)
+        deltas = rewards + self.gamma * (1 - dones) * values_next - values
+
+        # Compute GAE advantage in reverse
+        for t in reversed(range(self.num_steps)):
+            if t == self.num_steps - 1:  # Last timestep
+                advantages[:, t] = deltas[:, t]
+            else:
+                advantages[:, t] = deltas[:, t] + self.gamma * self.lam * (1 - dones[:, t]) * advantages[:, t + 1]
+
+        # Flatten the first two dimensions for returning GAE across all steps/envs
+        return self.format_tensor(advantages).unsqueeze(-1)
 
     def restore_savestate(self, checkpoint):
         model = ActorCritic(self.obs_dim, self.act_dim)
@@ -293,9 +301,6 @@ class PPO:
             return f'./ppo_checkpoints/{wandb.run.name}/ppo_policy_{iteration}.pth'
 
     def _log_summary(self):
-        """
-            Print to stdout the results for the most recent batch. Additionaly log data to wandb if applicable.
-        """
         lr = self.logger['lr']
         delta_t = self.logger['delta_t']
         self.logger['delta_t'] = time.time_ns()
@@ -305,9 +310,8 @@ class PPO:
         t_so_far = self.logger['t_so_far']
         i_so_far = self.logger['i_so_far']
         avg_ep_lens = np.mean(self.logger['batch_lens'])
-        avg_ep_rews = np.mean([np.sum(ep_rews) for ep_rews in self.logger['batch_rews']])
-        avg_actor_loss = np.mean(self.logger['actor_losses'])
-        avg_kl = np.mean(self.logger['kls'])
+        avg_ep_rews = self.logger['batch_rews'].item()
+        #avg_actor_loss = np.mean([losses.float().mean() for losses in self.logger['actor_losses']])
 
         #log to wandb
         if self.summary_writter is not None:
@@ -322,14 +326,13 @@ class PPO:
 
         avg_ep_lens = str(round(avg_ep_lens, 2))
         avg_ep_rews = str(round(avg_ep_rews, 2))
-        avg_actor_loss = str(round(avg_actor_loss, 5))
+        #avg_actor_loss = str(round(avg_actor_loss, 5))
 
         print(flush=True)
         print(f"-------------------- Iteration #{i_so_far} --------------------", flush=True)
         print(f"Average Episodic Length: {avg_ep_lens}", flush=True)
         print(f"Average Episodic Return: {avg_ep_rews}", flush=True)
-        print(f"Average Loss: {avg_actor_loss}", flush=True)
-        print(f"Average KL: {avg_kl}", flush=True)
+        #print(f"Average Loss: {avg_actor_loss}", flush=True)
         print(f"Timesteps So Far: {t_so_far}", flush=True)
         print(f"Iteration took: {delta_t} secs", flush=True)
         print(f"Current learning rate: {lr}", flush=True)

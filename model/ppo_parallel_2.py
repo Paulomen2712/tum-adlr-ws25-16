@@ -1,10 +1,12 @@
 import torch
 from model.network import ActorCritic
-from env.wrappers import LunarContinuous
+from environments.wrappers import LunarContinuous
+from torch.distributions import MultivariateNormal
 import torch.nn as nn
 import numpy as np
 import time
 import wandb
+from model.storage import Storage
 import os
 
 
@@ -15,16 +17,16 @@ class PPO:
         """
 			Initializes the PPO model, including hyperparameters.
 		"""
-        # Extract environment information
-        self.env = env()
-        self.obs_dim, self.act_dim =  self.env.get_environment_shape()
-         
+
         # Initialize hyperparameters for training with PPO
         self.summary_writter = summary_writter
         self._init_hyperparameters(hyperparameters)
 
-        
+        self.storage = Storage()
 
+        # Extract environment information
+        self.env = env()
+        self.obs_dim, self.act_dim =  self.env.get_environment_shape()
         
         # Initialize actor and critic
         self.policy = policy_class(self.obs_dim, self.act_dim, lr=self.lr, gamma=self.lr_gamma)
@@ -38,6 +40,9 @@ class PPO:
         self.actor_scheduler = self.policy.actor_scheduler
         self.critic_scheduler = self.policy.actor_optim
 
+        self.cov_var = torch.full(size=(self.act_dim,), fill_value=0.5)
+        self.cov_mat = torch.diag(self.cov_var)
+
         self.logger = {
 			'delta_t': time.time_ns(),
 			't_so_far': 0,          # timesteps simulated so far
@@ -45,7 +50,6 @@ class PPO:
 			'batch_lens': [],       # episodic lengths in current batch
 			'batch_rews': [],       # episodic returns in current batch
 			'actor_losses': [],     # losses of actor network in current batch
-            'kls': [],
             'lr': self.lr           # current learning rate
 		}
 
@@ -67,26 +71,14 @@ class PPO:
             self.logger['t_so_far'] = t_sim
             self.logger['i_so_far'] = iteration
 
-            returns = advantages + self.policy.get_value(obs).squeeze()
+            returns = advantages + self.critic(obs).squeeze().detach()
             A_k = (advantages - advantages.mean()) / (advantages.std() + 1e-10)
 
             batch_size = obs.size(0)
             inds = np.arange(batch_size)
             sgdbatch_size = batch_size // self.n_sgd_batches
-            loss = []
-            kls = []
 
             for _ in range(self.n_updates_per_iteration): 
-
-                # frac = (t_sim - 1.0) / total_timesteps
-                # new_lr = self.lr * (1.0 - frac)
-
-                # new_lr = max(new_lr, 0.0)
-                # self.actor_optim.param_groups[0]["lr"] = new_lr
-                # self.critic_optim.param_groups[0]["lr"] = new_lr
-                # # Log learning rate
-                # self.logger['lr'] = new_lr
-
                 #SGD
                 np.random.shuffle(inds)
                 for start in range(0, batch_size, sgdbatch_size):
@@ -99,19 +91,35 @@ class PPO:
                     batch_log_probs = log_probs[idx]
                     batch_advantages = A_k[idx]
                     batch_returns = returns[idx]
-                    batch_values, pred_batch_log_probs = self.policy.evaluate(batch_obs, batch_acts)
+                    V, predicted_batch_log_probs = self.evaluate(batch_obs, batch_acts)
+                    ratios = torch.exp(predicted_batch_log_probs - batch_log_probs)
+
+                    with torch.no_grad():
+                        approx_kl = ((ratios - 1) - (predicted_batch_log_probs - batch_log_probs)).mean()
+
+                    #Calculate losses
+                    surr1 = ratios * batch_advantages
+                    surr2 = torch.clamp(ratios, 1 - self.clip, 1 + self.clip) * batch_advantages
+
+                    actor_loss = (-torch.min(surr1, surr2)).mean()
+                    critic_loss = nn.MSELoss()(V, batch_returns)
+
+                    #Backprop
+                    self.actor_optim.zero_grad()
+                    actor_loss.backward(retain_graph=True)
+                    nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
+                    self.actor_optim.step()
                     
-                    actor_loss, kl = self.update_actor(pred_batch_log_probs, batch_log_probs, batch_advantages)
-                    self.update_critic(batch_values, batch_returns)
+                    self.critic_optim.zero_grad()
+                    critic_loss.backward()
+                    nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
+                    self.critic_optim.step()
 
-                    #Update learning rate
-                    # self.actor_scheduler.step()
-                    # self.critic_scheduler.step()
-                    loss.append(actor_loss.detach())
-                    kls.append(kl)
+                #Update learning rate
+                self.actor_scheduler.step()
+                self.critic_scheduler.step()
 
-                self.logger['actor_losses'].append(np.mean(loss))
-                self.logger['kls'].append(np.mean(kls))
+                self.logger['actor_losses'].append(actor_loss.detach())
             self.logger['lr'] = self.actor_scheduler.get_last_lr()[0]
             self._log_summary()
 
@@ -132,89 +140,59 @@ class PPO:
                 batch_lens: the lengths of each episode this batch. Shape: (number of episodes)
                 batch_advantages: the advantages collected from this batchShape: (number of timesteps)
         """
-        batch_obs = []
-        batch_acts = []
-        batch_log_probs = []
-        batch_rews = []
-        batch_lens = []
-        batch_vals = []
-        batch_dones = []
-        batch_advantages = []
+        global_step = 0
+        start_time = time.time()
+        next_obs = torch.Tensor(self.env.reset())
+        next_done = torch.zeros(self.num_envs)
+        for update in range(1, self.num_updates + 1):
 
-        ep_rews = []
-        ep_vals = []
-        ep_dones = []
+            for step in range(0, self.num_steps):
+                global_step += 1 * self.num_envs
 
-        t = 0
-        while t < self.timesteps_per_batch:
+                with torch.no_grad():
+                    actions, log_probs,value = self.get_action(next_obs)
+                    values = value.flatten()
 
-            ep_rews = []
-            ep_vals = []
-            ep_dones = []
+                obs, reward, done = self.env.step(actions.cpu().numpy())
+                rewards = torch.tensor(reward).view(-1)
+                
+                advantages = self.gae(rewards, values, done)
 
-            obs, done = self.env.reset()
+                self.storage.add_batch(self, next_obs, actions, log_probs, rewards, values, next_done, advantages)
+                next_obs, next_done = torch.Tensor(obs), torch.Tensor(done)
 
-            for ep_t in range(self.max_timesteps_per_episode):
-                t+=1
-
-                batch_obs.append(obs)
-                ep_dones.append(done)
-
-                action, log_prob, val = self.policy.act(obs)
-                obs, rew, done = self.env.step(action)
-
-                ep_rews.append(rew)
-                ep_vals.append(val.flatten())
-                batch_acts.append(action)
-                batch_log_probs.append(log_prob)
-
-                if done:
-                    break
-            
-            batch_lens.append(ep_t + 1)
-            batch_rews.append(ep_rews)
-            batch_vals.append(ep_vals)
-            batch_dones.append(ep_dones)
-            batch_advantages.extend(self.gae(ep_rews, ep_vals, ep_dones))
-
-        batch_advantages = torch.tensor(batch_advantages, dtype=torch.float)
-        batch_obs = torch.tensor(np.array(batch_obs), dtype=torch.float)
-        batch_acts = torch.tensor(np.array(batch_acts), dtype=torch.float)
-        batch_log_probs = torch.tensor(np.array(batch_log_probs), dtype=torch.float)
-
-        self.logger['batch_rews'] = batch_rews
-        self.logger['batch_lens'] = batch_lens
-
-        return batch_obs, batch_acts, batch_log_probs, batch_lens, batch_advantages
+        return self.storage.get_rollot_data()
     
-    def update_actor(self, pred_log_probs, log_probs, advantages):
-        log_ratios = pred_log_probs - log_probs
-        ratios = torch.exp(log_ratios)
-        surr1 = -ratios * advantages
-        surr2 = -torch.clamp(ratios, 1 - self.clip, 1 + self.clip) * advantages
-        with torch.no_grad():
-            kl = ((ratios - 1) - log_ratios).mean()
-        actor_loss = (torch.max(surr1, surr2)).mean()
-        
-        self.actor_optim.zero_grad()
-        actor_loss.backward()
-        nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
-        self.actor_optim.step()
-        return actor_loss.detach(), kl
+    def get_action(self, obs):
+        """
+            Samples an action from the actor/critic network.
+        """
+        mean, values = self.policy(obs)
 
-    def update_critic(self,  values, returns):
-        critic_loss = nn.MSELoss()(values, returns)
-        
-        self.critic_optim.zero_grad()
-        critic_loss.backward()
-        nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
-        self.critic_optim.step()
+        dist = MultivariateNormal(mean, self.cov_mat)
+
+        action = dist.sample()
+        log_prob = dist.log_prob(action)
+
+        return action.detach().numpy(), log_prob.detach(), values.detach()
+
+    def evaluate(self, batch_obs, batch_acts):
+        """
+            Estimates the values of each observation, and the log probs of
+            each action given the batch observations and actions. 
+        """
+        mean, values = self.policy(batch_obs)
+
+        dist = MultivariateNormal(mean, self.cov_mat)
+        log_probs = dist.log_prob(batch_acts)
+
+        return values.squeeze(), log_probs
 
     def gae(self, rewards, vals, dones):
         """
             Computes generalized advantage estimation (see https://arxiv.org/abs/1506.02438 page 4)
         """
-        advantages = []
+        advantages = torch.zeros_like(rewards)
         last_advantage = 0.0
         
         for t in reversed(range(len(vals))):
@@ -223,9 +201,7 @@ class PPO:
             else:
                 delta = rewards[t] - vals[t]
 
-            advantage = delta + self.gamma * self.lam * (1 - dones[t]) * last_advantage
-            last_advantage = advantage
-            advantages.insert(0, advantage)
+            advantages[t] = last_advantage = delta + self.gamma * self.lam * (1 - dones[t]) * last_advantage
         return advantages
 
     def restore_savestate(self, checkpoint):
@@ -260,7 +236,7 @@ class PPO:
         return val_rews,  val_dur
 
     def test(self, env_class=LunarContinuous):
-        self.policy.eval()
+        self.policy.test()
         env = env_class(render_mode='human')
         while True:
                 obs, done = env.reset()
@@ -272,10 +248,21 @@ class PPO:
         """
             Initialize default and custom values for hyperparameters
         """
+        # Algorithm hyperparameters
+        self.timesteps_per_batch = 4800                 # Number of timesteps to run per rollout
+        self.max_timesteps_per_episode = 1600           # Max number of timesteps per episode
+        self.n_updates_per_iteration = 5                # Number of times to update policy per iteration
+        self.lr = 0.005                                 # Learning rate of policy optimizer
+        self.gamma = 0.999                              # Discount factor for the rewards
+        self.lam = 0.98                                 # Lambda Parameter for GAE 
+        self.clip = 0.2                                 # Clip ratio for ppo loss. Using recomended 0.2
+        self.max_grad_norm = 0.5                        # Gradient clipping threshold
+        self.lr_gamma = 0.9998                          # Gamma for scheduler
+        self.n_sgd_batches = 1                          # Number of batches for sgd
 
-        config_hyperparameters = self.env.load_hyperparameters()
-        for param, val in config_hyperparameters.items():
-            setattr(self, param, val)
+        # Misc parameters
+        self.save_freq = 10                             # How often to save in number of iterations
+        self.seed = None                                # Sets the seed 
 
         for param, val in hyperparameters.items():
             exec('self.' + param + ' = ' + str(val))
@@ -306,8 +293,7 @@ class PPO:
         i_so_far = self.logger['i_so_far']
         avg_ep_lens = np.mean(self.logger['batch_lens'])
         avg_ep_rews = np.mean([np.sum(ep_rews) for ep_rews in self.logger['batch_rews']])
-        avg_actor_loss = np.mean(self.logger['actor_losses'])
-        avg_kl = np.mean(self.logger['kls'])
+        avg_actor_loss = np.mean([losses.float().mean() for losses in self.logger['actor_losses']])
 
         #log to wandb
         if self.summary_writter is not None:
@@ -329,7 +315,6 @@ class PPO:
         print(f"Average Episodic Length: {avg_ep_lens}", flush=True)
         print(f"Average Episodic Return: {avg_ep_rews}", flush=True)
         print(f"Average Loss: {avg_actor_loss}", flush=True)
-        print(f"Average KL: {avg_kl}", flush=True)
         print(f"Timesteps So Far: {t_so_far}", flush=True)
         print(f"Iteration took: {delta_t} secs", flush=True)
         print(f"Current learning rate: {lr}", flush=True)

@@ -3,6 +3,7 @@ from torch import nn
 import torch.nn.functional as F
 import numpy as np
 import torch.optim as optim
+from torch.distributions import MultivariateNormal
 
 class Encoder(nn.Module):
     """ Actor State Encoder. """
@@ -52,7 +53,7 @@ class FNN(nn.Module):
 class ActorCritic(nn.Module):
     """ Actor Critic Model."""
 
-    def __init__(self, obs_dim, action_dim, hidden_dim=64, lr=1e-5, gamma=0.99):
+    def __init__(self, obs_dim, action_dim, hidden_dim=64, lr=1e-5, gamma=0.99, std=0.5):
         """
             Initialize parameters and build model.
         """
@@ -73,16 +74,37 @@ class ActorCritic(nn.Module):
         self.actor_scheduler= optim.lr_scheduler.LambdaLR(self.actor_optim, lr_lambda=scheduler_lambda)
         self.critic_scheduler= optim.lr_scheduler.LambdaLR(self.critic_optim, lr_lambda=scheduler_lambda)
 
-    
-    def forward(self, obs):
+        self.cov_var = torch.full(size=(action_dim,), fill_value=std)
+        self.cov_mat = torch.diag(self.cov_var)
+
+    @torch.no_grad()
+    def get_value(self, obs):
+        return self.critic(obs)
+
+    @torch.no_grad()
+    def act(self, obs):
         """
-            Build a network that maps environment observation -> action probabilities + value estimate.
+            Samples an action from the actor/critic network.
         """
-        
-        actions = self.actor(obs)
-        critic = self.critic(obs)
-        
-        return actions, critic
+        mean, values = self.actor(obs), self.critic(obs)
+
+        dist = MultivariateNormal(mean, self.cov_mat)
+        action = dist.sample()
+        log_prob = dist.log_prob(action)
+
+        return action.numpy(), log_prob, values
+
+    def evaluate(self, obs, acts):
+        """
+            Estimates the values of each observation, and the log probs of
+            each action given the batch observations and actions. 
+        """
+        mean, values = self.actor(obs), self.critic(obs)
+
+        dist = MultivariateNormal(mean, self.cov_mat)
+        log_probs = dist.log_prob(acts)
+
+        return values.squeeze(), log_probs
     
     def store_savestate(self, checkpoint_path):
         """
@@ -112,3 +134,21 @@ class ActorCritic(nn.Module):
         self.actor_scheduler.load_state_dict(checkpoint['actor_scheduler_state_dict'])
         self.critic_scheduler.load_state_dict(checkpoint['critic_scheduler_state_dict'])
         print(f"Checkpoint restored from {checkpoint_path}")
+
+class AdaptiveScheduler(object):
+    # from https://github.com/leggedrobotics/rsl_rl/blob/master/rsl_rl/algorithms/ppo.py
+    def __init__(self, policy_optim, kl_threshold=0.02):
+        super().__init__()
+        self.min_lr = 1e-6
+        self.max_lr = 1e-2
+        self.kl_threshold = kl_threshold
+        self.policy_optim = policy_optim
+
+    def update(self, current_lr, kl_dist):
+        lr = current_lr
+        if kl_dist > (2.0 * self.kl_threshold):
+            lr = max(current_lr / 1.5, self.min_lr)
+        if kl_dist < (0.5 * self.kl_threshold):
+            lr = min(current_lr * 1.5, self.max_lr)
+        # self.policy_optim.param_groups[0]["lr"] = lr
+        return lr
