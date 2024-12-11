@@ -3,6 +3,7 @@ from torch import nn
 import torch.nn.functional as F
 import numpy as np
 import torch.optim as optim
+from torch.distributions import MultivariateNormal
 
 class Encoder(nn.Module):
     """ Actor State Encoder. """
@@ -52,7 +53,7 @@ class FNN(nn.Module):
 class ActorCritic(nn.Module):
     """ Actor Critic Model."""
 
-    def __init__(self, obs_dim, action_dim, hidden_dim=64, lr=1e-5, gamma=0.99):
+    def __init__(self, obs_dim, action_dim, hidden_dim=64, lr=1e-5, gamma=0.99, std=0.5):
         """
             Initialize parameters and build model.
         """
@@ -60,6 +61,8 @@ class ActorCritic(nn.Module):
         
         # Actor network (outputs probabilities for possible actions)
         self.actor = FNN(obs_dim, action_dim, hidden_dim)
+        self.cov_var = torch.full(size=(action_dim,), fill_value=std)
+        self.cov_mat = torch.diag(self.cov_var)
         
         # Critic network (outputs value estimate)
         self.critic = FNN(obs_dim, 1, hidden_dim)
@@ -74,15 +77,52 @@ class ActorCritic(nn.Module):
         self.critic_scheduler= optim.lr_scheduler.LambdaLR(self.critic_optim, lr_lambda=scheduler_lambda)
 
     
-    def forward(self, obs):
-        """
-            Build a network that maps environment observation -> action probabilities + value estimate.
-        """
+    # def forward(self, obs):
+    #     """
+    #         Build a network that maps environment observation -> action probabilities + value estimate.
+    #     """
         
-        actions = self.actor(obs)
-        critic = self.critic(obs)
+    #     actions = self.actor(obs)
+    #     critic = self.critic(obs)
         
-        return actions, critic
+    #     return actions, critic
+
+    @torch.no_grad()
+    def get_value(self, obs):
+        return self.critic(obs).squeeze()
+
+    @torch.no_grad()
+    def act(self, obs):
+        """
+            Samples an action from the actor/critic network.
+        """
+        mean, values = self.actor(obs), self.critic(obs)
+
+        dist = MultivariateNormal(mean, self.cov_mat)
+        action = dist.sample()
+        log_prob = dist.log_prob(action)
+
+        return action.numpy(), log_prob, values
+    
+    @torch.no_grad()
+    def sample_action(self, obs):
+        mean= self.actor(obs)
+        dist = MultivariateNormal(mean, self.cov_mat)
+        action = dist.sample()
+
+        return action.numpy()
+
+    def evaluate(self, obs, acts):
+        """
+            Estimates the values of each observation, and the log probs of
+            each action given the batch observations and actions. 
+        """
+        mean, values = self.actor(obs), self.critic(obs)
+
+        dist = MultivariateNormal(mean, self.cov_mat)
+        log_probs = dist.log_prob(acts)
+
+        return values.squeeze(), log_probs
     
     def store_savestate(self, checkpoint_path):
         """
