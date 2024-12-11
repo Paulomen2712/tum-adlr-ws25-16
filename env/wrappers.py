@@ -1,8 +1,9 @@
 import gym
 from gym.wrappers import RecordVideo
 from gym.envs.box2d import LunarLander
+from env.lunar_lander import LunarLanderWithWind
 import numpy as np
-import math
+import yaml
 
 class Environment(gym.Wrapper):
     """ Base class for wrapping environments. """
@@ -18,12 +19,24 @@ class Environment(gym.Wrapper):
             Makes a new environment.
         """
         pass  # Placeholder for environment-specific implementation
+
+    def _get_config_path(self):
+        """
+            Returns the hyperparameter yaml file path.
+        """
+        pass  # Placeholder for environment-specific implementation
     
     def get_environment_shape(self):
         """
             Returns tuple (observatio_space_shape, action_space_shape).
         """
         pass  # Placeholder for environment-specific implementation
+
+    def get_observation_shape(self):
+        pass
+
+    def get_acition_shape(self):
+        pass
     
     def reset(self):
         pass  # Placeholder for environment-specific implementation
@@ -36,6 +49,10 @@ class Environment(gym.Wrapper):
             Additionally wraps the environment for recording.
         """
         self.env = RecordVideo(self._make_environment(render_mode = 'rgb_array'), video_folder="videos", episode_trigger=episode_trigger)
+
+    def load_hyperparameters(self):
+        with open(self._get_config_path(), 'r') as f:
+            return yaml.safe_load(f)
 
 class LunarContinuous(Environment):
     """ OpenAi Lunar Continuous Environment Wrapper. """
@@ -52,8 +69,17 @@ class LunarContinuous(Environment):
     def _make_environment(self, **args):
         return LunarLander(continuous=True, **args)
     
+    def _get_config_path(self):
+        return "./configs/LunarLander.yaml"
+    
     def get_environment_shape(self):
         return self.env.observation_space.shape[0], self.env.action_space.shape[0]
+    
+    def get_observation_shape(self):
+        return self.env.observation_space.shape
+
+    def get_acition_shape(self):
+        return self.env.action_space.shape
     
     def reset(self):
         obs, _ = self.env.reset()
@@ -83,6 +109,9 @@ class LunarLanderWithKnownWind(LunarLanderWithUnknownWind):
     def get_environment_shape(self):
         return self.env.observation_space.shape[0] + 1, self.env.action_space.shape[0]
     
+    def get_observation_shape(self):
+        return (self.env.observation_space.shape[0],)
+
     def reset(self):
         obs, done = super().reset()
         return np.append(obs, self.env.get_wind_mag()), done
@@ -91,30 +120,3 @@ class LunarLanderWithKnownWind(LunarLanderWithUnknownWind):
         obs, reward, done = super().step(action)
         return np.append(obs, self.env.get_wind_mag()), reward, done
 
-class LunarLanderWithWind(LunarLander):
-    """
-        Custom LunarLander environment with wind turbulence.
-    """
-
-    def __init__(self, max_wind_power=15.0, render_mode=None):
-        super().__init__(render_mode=render_mode, continuous=True, enable_wind=True, wind_power=np.random.uniform(0, max_wind_power))
-        self.max_wind_power = max_wind_power
-
-    def get_wind_mag(self):
-        """
-            Returns current wind magnitude as calculated by the LunarLander environment.
-        """
-        return math.tanh(
-                    math.sin(0.02 * self.wind_idx)
-                    + (math.sin(math.pi * 0.01 * self.wind_idx))
-                )* self.wind_power
-        #return self.wind_power
-
-    def reset(self):
-        """
-            Resets the environment and resamples wind power
-        """
-        self.wind_power = np.random.uniform(0, self.max_wind_power)
-        self.wind_idx = np.random.randint(-9999, 9999)
-
-        return super().reset()
