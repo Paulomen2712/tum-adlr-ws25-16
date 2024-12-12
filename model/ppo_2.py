@@ -6,6 +6,7 @@ import numpy as np
 import time
 import wandb
 import os
+from utils.storage import Storage
 
 
 class PPO:
@@ -23,11 +24,10 @@ class PPO:
         self.summary_writter = summary_writter
         self._init_hyperparameters(hyperparameters)
 
-        
+        self.storage = Storage(self.num_steps, self.num_envs, self.obs_dim, self.act_dim, self.gamma, self.lam)
 
-        
         # Initialize actor and critic
-        self.policy = policy_class(self.obs_dim, self.act_dim, lr=self.lr, gamma=self.lr_gamma)
+        self.policy = policy_class(self.obs_dim, self.act_dim, lr=self.lr, gamma=self.lr_gamma)#.to(self.device)
         self.actor = self.policy.actor                                              
         self.critic = self.policy.critic
 
@@ -40,33 +40,26 @@ class PPO:
 
         self.logger = {
 			'delta_t': time.time_ns(),
-			't_so_far': 0,          # timesteps simulated so far
 			'i_so_far': 0,          # iterations simulated so far
-			'batch_lens': [],       # episodic lengths in current batch
 			'batch_rews': 0,       # episodic returns in current batch
 			'actor_losses': [],     # losses of actor network in current batch
             'kls': [],
             'lr': self.lr           # current learning rate
 		}
 
-    def train(self, total_timesteps):
+    def train(self):
         """
             Train the actor/critic network.
         """
         self.policy.train()
         self.logger['delta_t'] = time.time_ns()
-        t_sim = self.logger['t_so_far'] # Timesteps simulated so far
-        iteration = self.logger['i_so_far']
 
-        for t in range(0, 10000):   
-            obs, acts, log_probs, advantages = self.rollout()
-            iteration += 1
+        for it in range(0, self.base_train_it):   
+            obs, acts, log_probs, advantages, returns = self.rollout()
 
-            self.logger['t_so_far'] = t_sim
-            self.logger['i_so_far'] = iteration
+            self.logger['i_so_far'] = it + 1
+            self.logger['batch_rews'] = self.storage.get_average_episode_rewards()
 
-            returns = advantages + self.policy.get_value(obs)
-            A_k = (advantages - advantages.mean()) / (advantages.std() + 1e-10)
 
             batch_size = obs.size(0)
             inds = np.arange(batch_size)
@@ -95,7 +88,7 @@ class PPO:
                     batch_obs = obs[idx]
                     batch_acts = acts[idx]
                     batch_log_probs = log_probs[idx]
-                    batch_advantages = A_k[idx]
+                    batch_advantages = advantages[idx]
                     batch_returns = returns[idx]
                     batch_values, pred_batch_log_probs = self.policy.evaluate(batch_obs, batch_acts)
                     
@@ -105,8 +98,8 @@ class PPO:
                     #Update learning rate
                     # self.actor_scheduler.step()
                     # self.critic_scheduler.step()
-                    loss.append(actor_loss.detach())
-                    kls.append(kl)
+                    loss.append(actor_loss.detach().item())
+                    kls.append(kl.item())
 
                 self.logger['actor_losses'].append(np.mean(loss))
                 self.logger['kls'].append(np.mean(kls))
@@ -114,10 +107,66 @@ class PPO:
             self._log_summary()
 
 			# Save model every couple iterations
-            if self.save_freq > 0 and iteration % self.save_freq == 0:
-                save_path = self._get_save_path(iteration)
+            if self.save_freq > 0 and it+1 % self.save_freq == 0:
+                save_path = self._get_save_path(it+1)
                 os.makedirs(os.path.dirname(save_path), exist_ok=True)
                 self.policy.store_savestate(save_path)
+
+    def rollout2(self):
+        """
+            Collects batch of simulated data.
+
+            Return:
+                batch_obs: the observations collected this batch. Shape: (number of timesteps, dimension of observation)
+                batch_acts: the actions collected this batch. Shape: (number of timesteps, dimension of action)
+                batch_log_probs: the log probabilities of each action taken this batch. Shape: (number of timesteps)
+                batch_lens: the lengths of each episode this batch. Shape: (number of episodes)
+                batch_advantages: the advantages collected from this batchShape: (number of timesteps)
+        """
+
+        obs = torch.zeros((self.num_steps, self.num_envs, self.obs_dim))
+        actions = torch.zeros((self.num_steps, self.num_envs, self.act_dim))
+        logprobs = torch.zeros((self.num_steps, self.num_envs))
+        rewards = torch.zeros((self.num_steps, self.num_envs))
+        dones = torch.zeros((self.num_steps, self.num_envs))
+        values = torch.zeros((self.num_steps, self.num_envs))
+
+        next_obs, next_done = self.env.reset()
+        next_obs, next_done = torch.Tensor(next_obs), torch.Tensor(next_done)
+        
+
+        for step in range(self.num_steps):
+            obs[step] = next_obs
+            dones[step] = next_done
+
+            action, logprob, val = self.policy.act(next_obs)
+            next_obs, rew, next_done = self.env.step(action.numpy())
+
+
+            values[step] = val
+            actions[step] = action
+            logprobs[step] = logprob
+            rewards[step] = torch.Tensor(rew)
+            next_obs, next_done = torch.Tensor(next_obs), torch.Tensor(next_done)
+        
+        next_value = self.policy.get_value(next_obs).reshape(1, -1)
+        advantages = torch.zeros_like(rewards)
+        last_lam = 0
+        for t in reversed(range(self.num_steps)):
+            if t == self.num_steps - 1:
+                next_non_terminal = 1.0 - next_done
+                next_values = next_value
+            else:
+                next_non_terminal = 1.0 - dones[t + 1]
+                next_values = values[t + 1]
+            delta = rewards[t] + self.gamma * next_values * next_non_terminal - values[t]
+            advantages[t] = last_lam = delta + self.gamma * self.lam * next_non_terminal * last_lam
+
+        returns = advantages + values
+        if self.norm_adv:
+            advantages  = (advantages - advantages.mean()) / (advantages.std() + 1e-10)
+        print(self.get_average_episode_rewards(rewards, dones))
+        return self.format_tensor(obs).reshape(-1, self.obs_dim), self.format_tensor(actions).reshape(-1, self.act_dim), self.format_tensor(logprobs).flatten(), self.format_tensor(values).flatten(), self.format_tensor(advantages).flatten(), self.format_tensor(returns).flatten(), rewards[dones == 0].sum(dim=0).mean()
 
     def rollout(self):
         """
@@ -130,63 +179,23 @@ class PPO:
                 batch_lens: the lengths of each episode this batch. Shape: (number of episodes)
                 batch_advantages: the advantages collected from this batchShape: (number of timesteps)
         """
-        self.num_envs = 1
-        self.num_steps= 1200
-        self.storage_size = 20
+        self.storage.clear()
 
-        device = 'cpu'
-
-        obs = torch.zeros((self.storage_size, self.num_steps, self.num_envs, self.obs_dim))#.to(device)
-        actions = torch.zeros((self.storage_size,self.num_steps, self.num_envs, self.act_dim))#.to(device)
-        logprobs = torch.zeros((self.storage_size,self.num_steps, self.num_envs, 1))#.to(device)
-        rewards = torch.zeros((self.storage_size,self.num_steps, self.num_envs, 1))#.to(device)
-        dones = torch.zeros((self.storage_size,self.num_steps, self.num_envs, 1))#.to(device)
-        values = torch.zeros((self.storage_size, self.num_steps, self.num_envs, 1))#.to(device)
-
-        global_step = 0
-        start_time = time.time()
-        # next_obs = torch.Tensor(self.env.reset()).to(device)
-        # next_done = torch.zeros(self.num_envs).to(device)
         next_obs, next_done = self.env.reset()
-        next_obs, next_done = torch.Tensor(next_obs), torch.Tensor([float(next_done)])#.to(device)
-        for i in range(0,self.storage_size):
+        for _ in range(self.num_steps):
+            obs = next_obs
+            dones = next_done
 
-            # ep_rews = []
-            # ep_vals = []
-            # ep_dones = []
+            actions, logprobs, values = self.policy.act(torch.from_numpy(next_obs))
+            next_obs, rewards, next_done = self.env.step(actions.numpy())
 
-            # obs, done = self.env.reset()
-
-            for step in range(self.num_steps):
-                obs[i,step] = next_obs
-                dones[i,step] = next_done
-
-                action, logprob, val = self.policy.act(next_obs)
-                next_obs, rew, next_done = self.env.step(action)
-
-
-                values[i,step] = val.flatten()
-                actions[i,step] = torch.Tensor(action)#.to(device)
-                logprobs[i,step] = logprob
-                rewards[i,step] = torch.tensor(rew).view(-1)
-                next_obs, next_done = torch.Tensor(next_obs), torch.Tensor([float(next_done)])#.to(device)
-            
-            # batch_advantages.extend(self.gae(ep_rews, ep_vals, ep_dones))
-
+            self.storage.store_batch(obs, actions, logprobs, rewards, values, dones)
         
+        self.storage.compute_advantages(self.policy.get_value(torch.from_numpy(obs)), next_done)
+        return self.storage.get_rollot_data()
 
-        # batch_advantages = torch.tensor(batch_advantages, dtype=torch.float)
-        # batch_obs = torch.tensor(np.array(batch_obs), dtype=torch.float)
-        # batch_acts = torch.tensor(np.array(batch_acts), dtype=torch.float)
-        # batch_log_probs = torch.tensor(np.array(batch_log_probs), dtype=torch.float)
-
-        self.logger['batch_rews'] = torch.mean(rewards)
-        # self.logger['batch_lens'] = batch_lens
-
-        return self.format_tensor(obs), self.format_tensor(actions), self.format_tensor(logprobs), self.format_tensor(self.gae(rewards, values, dones))
-    
     def format_tensor(self, tensor):
-        return tensor.transpose(1, 2).flatten(start_dim=0, end_dim=1)
+        return tensor.transpose(0,1)
 
     def update_actor(self, pred_log_probs, log_probs, advantages):
         log_ratios = pred_log_probs - log_probs
@@ -211,31 +220,6 @@ class PPO:
         nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
         self.critic_optim.step()
 
-    def gae(self, rewards, values, dones):
-        """
-            Computes generalized advantage estimation (see https://arxiv.org/abs/1506.02438 page 4)
-        """
-        device='cpu'
-        advantages = torch.zeros_like(rewards)#.to(device)
-
-        # Add one additional step value for bootstrap
-        values_next = torch.zeros_like(values)#.to(device)
-        values_next[:, :-1] = values[:, 1:]  # Next values shifted for GAE
-        values_next[:, -1] = values[:, -1]  # Bootstrap with last value
-
-        # Compute deltas (TD residuals)
-        deltas = rewards + self.gamma * (1 - dones) * values_next - values
-
-        # Compute GAE advantage in reverse
-        for t in reversed(range(self.num_steps)):
-            if t == self.num_steps - 1:  # Last timestep
-                advantages[:, t] = deltas[:, t]
-            else:
-                advantages[:, t] = deltas[:, t] + self.gamma * self.lam * (1 - dones[:, t]) * advantages[:, t + 1]
-
-        # Flatten the first two dimensions for returning GAE across all steps/envs
-        return self.format_tensor(advantages).unsqueeze(-1)
-
     def restore_savestate(self, checkpoint):
         model = ActorCritic(self.obs_dim, self.act_dim)
         model.restore_savestate(checkpoint)
@@ -244,36 +228,36 @@ class PPO:
     def validate(self, max_iter, should_record=False, env_class=LunarContinuous):
         self.policy.eval()
         if should_record:
-            env = env_class()
-            env.make_environment_for_recording()
+            env = env_class(num_envs=max_iter,should_record='True')
         else:
-            env = env_class(render_mode = 'human')
+            env = env_class(num_envs=max_iter)
         val_rews = []
         val_dur = []
-        for _ in range(0, max_iter) :
-                obs, done = env.reset()
+        obs, done  = env.reset()
 
-                t = 0
-                ep_ret = 0
+        t = np.array([0]*max_iter)
+        ep_ret = np.array([0.]*max_iter)
 
-                while not done:
-                    t += 1
-                    action = self.actor(obs)
-                    obs, rew, done = env.step(action.detach().numpy())
-
-                    ep_ret += rew
-                    
-                val_rews.append(ep_ret)
-                val_dur.append(t)
+        while not all(done):
+            not_done = np.array([1]*max_iter) - done
+            t += not_done
+            action = self.actor(torch.Tensor(obs))
+            obs, rew, next_done = env.step(action.detach().numpy())
+            done |= next_done
+            ep_ret += rew * not_done
+            
+        val_rews.append(ep_ret)
+        val_dur.append(t)
         return val_rews,  val_dur
 
     def test(self, env_class=LunarContinuous):
         self.policy.eval()
-        env = env_class(render_mode='human')
+        env = env_class(num_envs=1,render_mode='human')
         while True:
                 obs, done = env.reset()
-                while not done:
-                    action = self.actor(obs)
+                print(obs, flush=True)
+                while not done[0]:
+                    action = self.actor(torch.Tensor(obs))
                     obs, _, done = env.step(action.detach().numpy())
 
     def _init_hyperparameters(self, hyperparameters):
@@ -307,33 +291,28 @@ class PPO:
         delta_t = (self.logger['delta_t'] - delta_t) / 1e9
         delta_t = str(round(delta_t, 2))
 
-        t_so_far = self.logger['t_so_far']
         i_so_far = self.logger['i_so_far']
-        avg_ep_lens = np.mean(self.logger['batch_lens'])
         avg_ep_rews = self.logger['batch_rews'].item()
-        #avg_actor_loss = np.mean([losses.float().mean() for losses in self.logger['actor_losses']])
+        avg_actor_loss = np.mean([losses for losses in self.logger['actor_losses']])
+        avg_kl = np.mean([kl for kl in self.logger['kls']])
 
         #log to wandb
         if self.summary_writter is not None:
             self.summary_writter.save_dict({
-                "simulated_timesteps": t_so_far,
                 "simulated_iterations": i_so_far,
-                "average_episode_lengths": avg_ep_lens,
                 "average_episode_rewards": avg_ep_rews,
                 "average_loss": avg_actor_loss,
                 "learning_rate": lr
             })
 
-        avg_ep_lens = str(round(avg_ep_lens, 2))
         avg_ep_rews = str(round(avg_ep_rews, 2))
-        #avg_actor_loss = str(round(avg_actor_loss, 5))
+        avg_actor_loss = str(round(avg_actor_loss, 5))
 
         print(flush=True)
         print(f"-------------------- Iteration #{i_so_far} --------------------", flush=True)
-        print(f"Average Episodic Length: {avg_ep_lens}", flush=True)
         print(f"Average Episodic Return: {avg_ep_rews}", flush=True)
-        #print(f"Average Loss: {avg_actor_loss}", flush=True)
-        print(f"Timesteps So Far: {t_so_far}", flush=True)
+        print(f"Average Loss: {avg_actor_loss}", flush=True)
+        print(f"Average KL Divergence: {avg_kl}", flush=True)
         print(f"Iteration took: {delta_t} secs", flush=True)
         print(f"Current learning rate: {lr}", flush=True)
         print(f"------------------------------------------------------", flush=True)

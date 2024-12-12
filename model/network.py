@@ -41,9 +41,6 @@ class FNN(nn.Module):
         self.fc3 = nn.Linear(hidden_dim, output_dim)
 
     def forward(self, obs):
-        if isinstance(obs, np.ndarray):
-            obs = torch.tensor(obs, dtype=torch.float)
-
         activation1 = F.relu(self.fc1(obs))
         activation2 = F.relu(self.fc2(activation1))
         output = self.fc3(activation2)
@@ -74,8 +71,10 @@ class ActorCritic(nn.Module):
         self.actor_scheduler= optim.lr_scheduler.LambdaLR(self.actor_optim, lr_lambda=scheduler_lambda)
         self.critic_scheduler= optim.lr_scheduler.LambdaLR(self.critic_optim, lr_lambda=scheduler_lambda)
 
-        self.cov_var = torch.full(size=(action_dim,), fill_value=std)
-        self.cov_mat = torch.diag(self.cov_var)
+        # self.cov_var = torch.full(size=(action_dim,), fill_value=std)
+        # self.cov_mat = torch.diag(self.cov_var)
+        self.register_buffer('cov_var', torch.full(size=(action_dim,), fill_value=std))
+        self.register_buffer('cov_mat', torch.diag(self.cov_var))
 
     @torch.no_grad()
     def get_value(self, obs):
@@ -92,7 +91,7 @@ class ActorCritic(nn.Module):
         action = dist.sample()
         log_prob = dist.log_prob(action)
 
-        return action.numpy(), log_prob, values
+        return action, log_prob, values.view(-1)
 
     def evaluate(self, obs, acts):
         """

@@ -1,6 +1,8 @@
 from gym.envs.box2d import LunarLander
 import numpy as np
+from gym import spaces
 import math
+import Box2D
 SCALE = 30.0
 MAIN_ENGINE_POWER = 13.0
 SIDE_ENGINE_POWER = 0.6
@@ -15,10 +17,48 @@ class LunarLanderWithWind(LunarLander):
         Custom LunarLander environment with wind turbulence.
     """
 
-    def __init__(self, min_wind_power = 15., max_wind_power=20., render_mode=None):
+    def __init__(self, min_wind_power = 15., max_wind_power=50., render_mode=None):
         self.max_wind_power = max_wind_power
         self.min_wind_power = min_wind_power
-        super().__init__(render_mode=render_mode, continuous=True, enable_wind=True, wind_power=self.sample_wind())
+        super().__init__(render_mode=render_mode, continuous=True, enable_wind=True)
+        low = np.array(
+            [
+                # these are bounds for position
+                # realistically the environment should have ended
+                # long before we reach more than 50% outside
+                -1.5,
+                -1.5,
+                # velocity bounds is 5x rated speed
+                -5.0,
+                -5.0,
+                -math.pi,
+                -5.0,
+                -0.0,
+                -0.0,
+                -max_wind_power,
+            ]
+        ).astype(np.float32)
+        high = np.array(
+            [
+                # these are bounds for position
+                # realistically the environment should have ended
+                # long before we reach more than 50% outside
+                1.5,
+                1.5,
+                # velocity bounds is 5x rated speed
+                5.0,
+                5.0,
+                math.pi,
+                5.0,
+                1.0,
+                1.0,
+                max_wind_power,
+            ]
+        ).astype(np.float32)
+
+        # useful range is -1 .. +1, but spikes can be higher
+        self.observation_space = spaces.Box(low, high)
+        self.wind_power = self.sample_wind()
         
 
     def get_wind_mag(self):
@@ -132,8 +172,9 @@ class LunarLanderWithWind(LunarLander):
             20.0 * self.lander.angularVelocity / FPS,
             1.0 if self.legs[0].ground_contact else 0.0,
             1.0 if self.legs[1].ground_contact else 0.0,
+            self.wind_power
         ]
-        assert len(state) == 8
+        assert len(state) == 9
 
         reward = 0
         shaping = (

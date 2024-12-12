@@ -1,0 +1,27 @@
+#Base Policy
+base_train_it: 100                        # Total iterations to train the base policy
+num_envs: 30                              # Number of independent environments to train on
+num_steps: 900                            # Number of timesteps per environment
+
+#Adapt Module
+adp_train_it: 50                          # Total iterations to train the base policy
+adp_num_envs: 30                          # Number of independent environments to train on
+adp_num_steps: 900                        # Number of timesteps per environment
+
+#GAE
+gamma: 0.99                               # Discount factor for the rewards 
+lam: 0.95                                 # Lambda Parameter for GAE 
+
+# Backprop
+n_updates_per_iteration: 2                # Number of times to update policy per iteration
+lr: 0.005                                  # Learning rate of policy optimizer
+clip: 0.2                                 # Clip ratio for ppo loss. Using recomended 0.2
+clip_grad: True
+max_grad_norm: 0.5                       # Gradient clipping threshold
+lr_gamma: 0.995                          # Gamma for scheduler
+n_sgd_batches: 64                         # Number of batches for sgd
+
+# Misc parameters
+save_freq: 50                             # How often to save in number of iterations
+seed: ~ 
+device: 'cpu'
