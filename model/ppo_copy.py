@@ -1,6 +1,6 @@
 import torch
-from model.network import ActorCritic
-from model.environments import LunarContinuous
+from model.network import ActorCriticWithEncoder
+from model.environments import LunarContinuous, LunarLanderWithKnownWind
 from torch.distributions import MultivariateNormal
 import torch.nn as nn
 import numpy as np
@@ -13,7 +13,7 @@ import os
 class PPO:
     """PPO Algorithm Implementation."""
 
-    def __init__(self, summary_writter=None, env = LunarContinuous, policy_class = ActorCritic, **hyperparameters):
+    def __init__(self, summary_writter=None, env = LunarLanderWithKnownWind, policy_class = ActorCriticWithEncoder , **hyperparameters):
         """
 			Initializes the PPO model, including hyperparameters.
 		"""
@@ -29,6 +29,7 @@ class PPO:
         
         # Initialize actor and critic
         self.policy = policy_class(self.obs_dim, self.act_dim, lr=self.lr, gamma=self.lr_gamma)
+        self.base_encoder = self.policy.encoder
         self.actor = self.policy.actor                                              
         self.critic = self.policy.critic
 
@@ -52,17 +53,19 @@ class PPO:
             'lr': self.lr           # current learning rate
 		}
 
+
     def train(self, total_timesteps):
         """
             Train the actor/critic network.
         """
+        # torch.autograd.set_detect_anomaly(True)
         self.policy.train()
         self.logger['delta_t'] = time.time_ns()
         t_sim = self.logger['t_so_far'] # Timesteps simulated so far
         iteration = self.logger['i_so_far']
 
         while t_sim < total_timesteps:   
-            obs, acts, log_probs, ep_lens, advantages = self.rollout()
+            obs, acts, log_probs, ep_lens, advantages, modified_obs, vals = self.rollout()
 
             t_sim += np.sum(ep_lens)
             iteration += 1
@@ -70,8 +73,12 @@ class PPO:
             self.logger['t_so_far'] = t_sim
             self.logger['i_so_far'] = iteration
 
-            returns = advantages + self.critic(obs).squeeze().detach()
+            # _, critic_vals, _ = self.policy(obs)
+            returns = advantages + vals.squeeze()
             A_k = (advantages - advantages.mean()) / (advantages.std() + 1e-10)
+            print(f"advantages requires_grad: {advantages.requires_grad}")
+            print(f"critic_vals requires_grad: {vals.requires_grad}")
+
 
             batch_size = obs.size(0)
             inds = np.arange(batch_size)
@@ -91,7 +98,6 @@ class PPO:
                     batch_log_probs = log_probs[idx]
                     batch_advantages = A_k[idx]
                     batch_returns = returns[idx]
-                    print(batch_returns)
                     V, predicted_batch_log_probs = self.evaluate(batch_obs, batch_acts)
                     ratios = torch.exp(predicted_batch_log_probs - batch_log_probs)
 
@@ -100,6 +106,10 @@ class PPO:
                     surr2 = torch.clamp(ratios, 1 - self.clip, 1 + self.clip) * batch_advantages
 
                     actor_loss = (-torch.min(surr1, surr2)).mean()
+
+                    print(f"V shape: {V.shape}, batch_returns shape: {batch_returns.shape}")
+                    print(f"batch_returns requires_grad: {batch_returns.requires_grad}")
+
                     critic_loss = nn.MSELoss()(V, batch_returns)
 
                     #Backprop
@@ -120,6 +130,7 @@ class PPO:
             self.logger['lr'] = self.actor_scheduler.get_last_lr()[0]
             self._log_summary()
 
+
 			# Save model every couple iterations
             if self.save_freq > 0 and iteration % self.save_freq == 0:
                 save_path = self._get_save_path(iteration)
@@ -137,6 +148,7 @@ class PPO:
                 batch_lens: the lengths of each episode this batch. Shape: (number of episodes)
         """
         batch_obs = []
+        batch_modified_obs = []
         batch_acts = []
         batch_log_probs = []
         batch_rews = []
@@ -164,9 +176,10 @@ class PPO:
                 batch_obs.append(obs)
                 ep_dones.append(done)
 
-                action, log_prob, val = self.get_action(obs)
+                action, log_prob, val, modified_obs = self.get_action(obs)
                 obs, rew, done = self.env.step(action)
 
+                batch_modified_obs.append(modified_obs)
                 ep_rews.append(rew)
                 ep_vals.append(val.flatten())
                 batch_acts.append(action)
@@ -177,7 +190,8 @@ class PPO:
             
             batch_lens.append(ep_t + 1)
             batch_rews.append(ep_rews)
-            batch_vals.append(ep_vals)
+            # batch_vals.append(ep_vals)
+            batch_vals.extend(ep_vals)
             batch_dones.append(ep_dones)
             batch_advantages.extend(self.gae(ep_rews, ep_vals, ep_dones))
 
@@ -185,24 +199,27 @@ class PPO:
         batch_obs = torch.tensor(np.array(batch_obs), dtype=torch.float)
         batch_acts = torch.tensor(np.array(batch_acts), dtype=torch.float)
         batch_log_probs = torch.tensor(np.array(batch_log_probs), dtype=torch.float)
+        # batch_vals = torch.tensor(np.concatenate(batch_vals), dtype=torch.float)
+        batch_vals = torch.cat(batch_vals, dim=0)
+        batch_modified_obs = torch.stack(batch_modified_obs, dim=0)
 
         self.logger['batch_rews'] = batch_rews
         self.logger['batch_lens'] = batch_lens
 
-        return batch_obs, batch_acts, batch_log_probs, batch_lens, batch_advantages
+        return batch_obs, batch_acts, batch_log_probs, batch_lens, batch_advantages, batch_modified_obs, batch_vals
     
     def get_action(self, obs):
         """
             Samples an action from the actor/critic network.
         """
-        mean, values = self.policy(obs)
+        mean, values, modified_obs = self.policy(obs)
 
         dist = MultivariateNormal(mean, self.cov_mat)
 
         action = dist.sample()
         log_prob = dist.log_prob(action)
 
-        return action.detach().numpy(), log_prob.detach(), values.detach()
+        return action.detach().numpy()[0], log_prob.detach(), values.detach(), modified_obs
 
     def evaluate(self, batch_obs, batch_acts):
         """
@@ -210,7 +227,7 @@ class PPO:
             each action in the most recent batch with the most recent
             iteration of the actor/critic network. 
         """
-        mean, values = self.policy(batch_obs)
+        mean, values, _ = self.policy(batch_obs)
 
         dist = MultivariateNormal(mean, self.cov_mat)
         log_probs = dist.log_prob(batch_acts)

@@ -59,7 +59,9 @@ class LunarContinuous(Environment):
     
     def step(self, action):
         obs, reward, terminated, truncated, _ = self.env.step(action)
-        done = terminated | truncated
+        # done = terminated | truncated
+        done = bool(terminated or truncated)
+
         return obs, reward, done
     
 class LunarLanderWithUnknownWind(LunarContinuous):
@@ -82,6 +84,7 @@ class LunarLanderWithKnownWind(LunarLanderWithUnknownWind):
     
     def step(self, action):
         obs, reward, done = super().step(action)
+        done = bool(done)
         return np.append(obs, self.env.get_wind_mag()), reward, done
 
 class LunarLanderWithWind(LunarLander):
@@ -89,8 +92,9 @@ class LunarLanderWithWind(LunarLander):
     Custom LunarLander environment with wind turbulence.
     """
 
-    def __init__(self, max_wind_power=15.0, render_mode=None):
-        super().__init__(render_mode=render_mode, continuous=True, enable_wind=True, wind_power=np.random.uniform(0, max_wind_power))
+    def __init__(self,min_wind_power=10, max_wind_power=20, render_mode=None):
+        super().__init__(render_mode=render_mode, continuous=True, enable_wind=True, wind_power=np.random.uniform(min_wind_power, max_wind_power))
+        self.min_wind_power = min_wind_power
         self.max_wind_power = max_wind_power
 
     def get_wind_mag(self):
@@ -106,7 +110,7 @@ class LunarLanderWithWind(LunarLander):
         """
             Resets the environment and resamples wind power
         """
-        self.wind_power = np.random.uniform(0, self.max_wind_power)
+        self.wind_power = np.random.uniform(self.min_wind_power, self.max_wind_power)
         self.wind_idx = np.random.randint(-9999, 9999)
 
         return super().reset()
