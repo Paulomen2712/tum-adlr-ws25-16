@@ -1,3 +1,4 @@
+import gym
 from gym.vector import SyncVectorEnv
 from gym.wrappers import RecordVideo
 from gym.envs.box2d import LunarLander
@@ -65,7 +66,8 @@ class LunarContinuous(VectorEnvironment):
             super().__init__( [lambda: self._make_environment( **args) for _ in range(num_envs)])
 
     def _make_environment(self, **args):
-        return LunarLander(continuous=True, **args)
+        env = LunarLander(continuous=True, **args)
+        return env
     
     def _get_config_path(self):
         return "./configs/LunarLander.yaml"

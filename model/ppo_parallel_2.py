@@ -6,7 +6,7 @@ import torch.nn as nn
 import numpy as np
 import time
 import wandb
-from model.storage import Storage
+from utils.storage import Storage
 import os
 
 

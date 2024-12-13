@@ -5,7 +5,6 @@ import numpy as np
 import torch.optim as optim
 from torch.distributions import MultivariateNormal
 from torch.distributions.normal import Normal
-
 class Encoder(nn.Module):
     """ Actor State Encoder. """
 
@@ -51,7 +50,7 @@ class FNN(nn.Module):
 class ActorCritic(nn.Module):
     """ Actor Critic Model."""
 
-    def __init__(self, obs_dim, action_dim, hidden_dim=64, lr=1e-5, gamma=0.99, std=0.5):
+    def __init__(self, obs_dim, action_dim, hidden_dim=64, lr=1e-5, eps=1e-5, gamma=0.99, std=0.5):
         """
             Initialize parameters and build model.
         """
@@ -65,20 +64,17 @@ class ActorCritic(nn.Module):
 
         self.actor_logstd = nn.Parameter(torch.zeros(1, action_dim))
 
-        # self.cov_var = torch.full(size=(action_dim,), fill_value=std)
-        # self.cov_mat = torch.diag(self.cov_var)
-        # self.register_buffer('cov_var', torch.full(size=(action_dim,), fill_value=std))
-        # self.register_buffer('cov_mat', torch.diag(self.cov_var))
-
-        self.actor_optim = optim.Adam([*self.actor.parameters(),self.actor_logstd], lr=lr)
-        self.critic_optim = optim.Adam(self.critic.parameters(), lr=lr)
+        self.optim = optim.Adam(self.parameters(), lr=lr, eps=1e-5)
 
         # self.actor_scheduler= optim.lr_scheduler.StepLR(self.actor_optim, step_size = 1, gamma=gamma)
         # self.critic_scheduler= optim.lr_scheduler.StepLR(self.critic_optim, step_size = 1, gamma=gamma)
         scheduler_lambda = lambda epoch: gamma ** epoch
-        self.actor_scheduler= optim.lr_scheduler.LambdaLR(self.actor_optim, lr_lambda=scheduler_lambda)
-        self.critic_scheduler= optim.lr_scheduler.LambdaLR(self.critic_optim, lr_lambda=scheduler_lambda)
+        self.scheduler= optim.lr_scheduler.LambdaLR(self.optim, lr_lambda=scheduler_lambda)
 
+        # self.cov_var = torch.full(size=(action_dim,), fill_value=std)
+        # self.cov_mat = torch.diag(self.cov_var)
+        # self.register_buffer('cov_var', torch.full(size=(action_dim,), fill_value=std))
+        # self.register_buffer('cov_mat', torch.diag(self.cov_var))
 
     @torch.no_grad()
     def get_value(self, obs):
@@ -97,14 +93,6 @@ class ActorCritic(nn.Module):
         log_prob = dist.log_prob(action)
 
         return action, log_prob.sum(1), values.view(-1)
-    
-    @torch.no_grad()
-    def sample_action(self, obs):
-        mean = self.actor(obs)
-        action_logstd = self.actor_logstd.expand_as(mean)
-        action_std = torch.exp(action_logstd)
-        dist = Normal(mean, action_std)
-        return dist.sample()
 
     def evaluate(self, obs, acts):
         """
@@ -117,7 +105,7 @@ class ActorCritic(nn.Module):
         dist = Normal(mean, action_std)
         log_probs = dist.log_prob(acts)
 
-        return values.squeeze(), log_probs.sum(1)
+        return values.squeeze(), log_probs.sum(1), mean, action_std
     
     def store_savestate(self, checkpoint_path):
         """
@@ -155,13 +143,24 @@ class AdaptiveScheduler(object):
         self.min_lr = 1e-6
         self.max_lr = 1e-2
         self.kl_threshold = kl_threshold
-        self.policy_optim = policy_optim
+        self.optim = policy_optim
 
-    def update(self, current_lr, kl_dist):
+    def policy_kl(self, p0_mu, p0_sigma, p1_mu, p1_sigma):
+        c1 = torch.log(p1_sigma/p0_sigma + 1e-5)
+        c2 = (p0_sigma ** 2 + (p1_mu - p0_mu) ** 2) / (2.0 * (p1_sigma ** 2 + 1e-5))
+        c3 = -1.0 / 2.0
+        kl = c1 + c2 + c3
+        kl = kl.sum(dim=-1)  # returning mean between all steps of sum between all actions
+        return kl.mean()
+
+    def update(self, current_lr, new_mu, new_sigma, old_mu, old_sigma):
+        kl_dist = self.policy_kl(new_mu, new_sigma, old_mu, old_sigma)
+        
         lr = current_lr
         if kl_dist > (2.0 * self.kl_threshold):
             lr = max(current_lr / 1.5, self.min_lr)
         if kl_dist < (0.5 * self.kl_threshold):
             lr = min(current_lr * 1.5, self.max_lr)
-        # self.policy_optim.param_groups[0]["lr"] = lr
+        self.optim.param_groups[0]["lr"] = lr
+        print(kl_dist, lr)
         return lr
