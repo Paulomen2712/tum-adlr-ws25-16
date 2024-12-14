@@ -1,18 +1,19 @@
 import torch
-from model.network import ActorCritic
+from networks.base_policy import ActorCriticWithEncoder
+from networks.adaptive_module import AdaptiveActorCritic
 from env.wrappers import LunarContinuous
 import torch.nn as nn
 import numpy as np
 import time
 import wandb
 import os
-from utils.storage import Storage
+from utils.storage import Storage, AdaptStorage
 
 
 class PPO:
     """PPO Algorithm Implementation."""
 
-    def __init__(self, summary_writter=None, env = LunarContinuous, policy_class = ActorCritic, **hyperparameters):
+    def __init__(self, summary_writter=None, env = LunarContinuous, policy_class = ActorCriticWithEncoder, **hyperparameters):
         """
 			Initializes the PPO model, including hyperparameters.
 		"""
@@ -24,22 +25,25 @@ class PPO:
         # Initialize hyperparameters for training with PPO
         self.summary_writter = summary_writter
         self._init_hyperparameters(hyperparameters)
-
-        self.storage = Storage(self.num_steps, self.num_envs, self.obs_dim, self.act_dim, self.gamma, self.lam)
+        self.device = 'cuda'
+        self.storage = Storage(self.num_steps, self.num_envs, self.obs_dim, self.act_dim, self.gamma, self.lam, self.device )
+        self.adp_storage = AdaptStorage(self.adp_num_steps, self.num_envs, self.device )
 
         # Initialize actor and critic
-        self.policy = policy_class(self.obs_dim, self.act_dim, lr=self.lr, gamma=self.lr_gamma)
+        self.policy = policy_class(self.obs_dim, self.act_dim, actor_lr=self.actor_lr, critic_lr=self.critic_lr, gamma=self.lr_gamma)
         self.actor = self.policy.actor                                              
         self.critic = self.policy.critic
+        self.adapt_policy = AdaptiveActorCritic(self.obs_dim, self.act_dim, lr=self.adp_lr)
         
 
         # Initialize optimizers for actor and critic
         self.actor_optim = self.policy.actor_optim  
         self.critic_optim = self.policy.critic_optim
+        self.adapt_optim=self.adapt_policy.optim
 
         self.actor_scheduler = self.policy.actor_scheduler
         self.critic_scheduler = self.policy.actor_optim
-        self.device = torch.device('cuda')
+        
         self.policy.to(self.device)
 
         self.logger = {
@@ -49,10 +53,14 @@ class PPO:
             'rollout_compute': 0,
             'grad_compute': 0,
 			'actor_losses': [],     # losses of actor network in current batch
+            'critic_losses': [],
+            'adp_losses': [],
             'val_rew': None,
             'val_dur': None,
             'kls': [],
-            'lr': self.lr           # current learning rate
+            'actor_lr': self.actor_lr,           # current learning rate
+            'critic_lr': self.critic_lr,
+            'adp_lr': self.adp_lr 
 		}
 
     def train(self):
@@ -63,6 +71,19 @@ class PPO:
         self.logger['delta_t'] = time.time_ns()
 
         for it in range(0, self.base_train_it): 
+            if self.anneal_lr:
+                frac = it / (self.base_train_it + self.anneal_discount)
+                actor_lr = self.actor_lr * (1.0 - frac)
+                critic_lr = self.critic_lr * (1.0 - frac)
+
+                self.actor_optim.param_groups[0]["lr"] = actor_lr
+                self.critic_optim.param_groups[0]["lr"] = critic_lr
+                # Log learning rate
+                self.actor_lr = actor_lr
+                self.logger['actor_lr'] = self.actor_lr
+                self.critic_lr = actor_lr
+                self.logger['critic_lr'] = self.critic_lr
+
             rollout_start = time.time_ns()  
             obs, acts, log_probs, advantages, returns = self.rollout()
             rollout_end = time.time_ns() 
@@ -75,22 +96,12 @@ class PPO:
             batch_size = obs.size(0)
             inds = np.arange(batch_size)
             sgdbatch_size = batch_size // self.n_sgd_batches
-            loss = []
+            act_loss = []
+            crit_loss = []
             kls = []
 
             grad_start = time.time_ns() 
             for _ in range(self.n_updates_per_iteration): 
-                    
-                if self.anneal_lr:
-                    frac = it / self.base_train_it
-                    new_lr = self.lr * (1.0 - frac)
-
-                    new_lr = max(new_lr, 0.0)
-                    self.actor_optim.param_groups[0]["lr"] = new_lr
-                    self.critic_optim.param_groups[0]["lr"] = new_lr
-                    # Log learning rate
-                    self.lr = new_lr
-                    self.logger['lr'] = self.lr
 
                 #SGD
                 np.random.shuffle(inds)
@@ -104,15 +115,17 @@ class PPO:
                     batch_log_probs = log_probs[idx]
                     batch_advantages = advantages[idx]
                     batch_returns = returns[idx]
-                    batch_values, pred_batch_log_probs = self.policy.evaluate(batch_obs, batch_acts)
+                    batch_values, pred_batch_log_probs, pred_batch_entropies = self.policy.evaluate(batch_obs, batch_acts)
                     
-                    actor_loss, kl = self.update_actor(pred_batch_log_probs, batch_log_probs, batch_advantages)
-                    self.update_critic(batch_values, batch_returns)
+                    actor_loss, kl = self.update_actor(pred_batch_log_probs, batch_log_probs, batch_advantages, pred_batch_entropies)
+                    critic_loss = self.update_critic(batch_values, batch_returns)
 
-                    loss.append(actor_loss.detach().item())
+                    act_loss.append(actor_loss.detach().item())
+                    crit_loss.append(critic_loss.detach().item())
                     kls.append(kl.item())
 
-                self.logger['actor_losses'].append(np.mean(loss))
+                self.logger['actor_losses'].append(np.mean(act_loss))
+                self.logger['critic_losses'].append(np.mean(crit_loss))
                 self.logger['kls'].append(np.mean(kls))
             # self.logger['lr'] = self.actor_scheduler.get_last_lr()[0]
 
@@ -132,6 +145,51 @@ class PPO:
                 save_path = self._get_save_path(it+1)
                 os.makedirs(os.path.dirname(save_path), exist_ok=True)
                 self.policy.store_savestate(save_path)
+        # self.adapt_policy.set_policy(self.policy)
+        # self.adapt_policy.to(self.device)
+        # for ad_it in range(0, self.adp_train_it):
+        #     if self.anneal_lr:
+        #         frac = ad_it / (self.adp_train_it + self.anneal_discount) 
+        #         adp_lr = self.adp_lr * (1.0 - frac)
+
+        #         self.adapt_optim.param_groups[0]["lr"] = adp_lr
+        #         # Log learning rate
+        #         self.adp_lr = adp_lr
+        #         self.logger['adp_lr'] = self.adp_lr = adp_lr
+
+        #     rollout_start = time.time_ns()  
+        #     obs, = self.adpt_rollout()
+        #     rollout_end = time.time_ns() 
+
+        #     self.logger['i_so_far'] = ad_it + 1
+        #     self.logger['rollout_compute'] = (rollout_end - rollout_start) / 1e9
+
+
+        #     batch_size = obs.size(0)
+        #     inds = np.arange(batch_size)
+        #     sgdbatch_size = batch_size // self.n_sgd_batches
+        #     loss = []
+
+        #     grad_start = time.time_ns() 
+        #     for _ in range(self.n_updates_per_iteration): 
+
+        #         #SGD
+        #         np.random.shuffle(inds)
+        #         for start in range(0, batch_size, sgdbatch_size):
+        #             end = start + sgdbatch_size
+        #             idx = inds[start:end]
+                    
+        #             #Restrict values to current batch
+        #             batch_obs = obs[idx]
+        #             pred_batch_values = self.adapt_policy.evaluate(batch_obs, batch_acts)
+                    
+        #             adp_loss = self.update_adpt(pred_batch_values, batch_values)
+        #             loss.append(adp_loss.detach().item())
+        #         self.logger['adp_losses'].append(np.mean(loss))
+
+        #     grad_end = time.time_ns()
+        #     self.logger['grad_compute'] = (grad_end - grad_start) / 1e9
+        #     self._log_summary_adp()
 
     def rollout(self):
         """
@@ -148,18 +206,30 @@ class PPO:
 
         next_obs, next_done = self.env.reset()
         for _ in range(self.num_steps):
-            obs = next_obs
-            dones = next_done
+            obs = next_obs.copy() 
+            dones = next_done.copy() 
 
             actions, logprobs, values = self.policy.act(torch.from_numpy(next_obs).to(self.device))
             next_obs, rewards, next_done = self.env.step(actions.cpu().numpy())
 
             self.storage.store_batch(obs, actions, logprobs, rewards, values, dones)
-        
-        self.storage.compute_advantages(self.policy.get_value(torch.from_numpy(obs).to(self.device)), next_done)
+        self.storage.compute_advantages(self.policy.get_value(torch.from_numpy(next_obs).to(self.device)), next_done)
         return self.storage.get_rollot_data()
 
-    def update_actor(self, pred_log_probs, log_probs, advantages):
+    def adpt_rollout(self):
+        self.adp_storage.clear()
+
+        next_obs, _ = self.env.reset()
+        for _ in range(self.adp_num_steps):
+            obs = next_obs.copy() 
+
+            actions, = self.adapt_policy.act(torch.from_numpy(next_obs).to(self.device))
+            next_obs, _, _ = self.env.step(actions.cpu().numpy())
+
+            self.adp_storage.store_obs(obs)
+        return self.storage.get_rollot_data()
+
+    def update_actor(self, pred_log_probs, log_probs, advantages, entropies):
         log_ratios = pred_log_probs - log_probs
         ratios = torch.exp(log_ratios)
         surr1 = -ratios * advantages
@@ -167,7 +237,7 @@ class PPO:
         with torch.no_grad():
             kl = ((ratios - 1) - log_ratios).mean()
         actor_loss = (torch.max(surr1, surr2)).mean()
-        
+        actor_loss -= self.entropy_coef * entropies.mean()
         self.actor_optim.zero_grad()
         actor_loss.backward()
         nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
@@ -181,9 +251,19 @@ class PPO:
         critic_loss.backward()
         nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
         self.critic_optim.step()
+        return critic_loss
+
+    def update_adpt(self,  pred_values, values):
+        adapt_loss = nn.MSELoss()(pred_values.squeeze(), values.squeeze())
+        
+        self.adapt_optim.zero_grad()
+        adapt_loss.backward()
+        nn.utils.clip_grad_norm_(self.adapt_encoder.parameters(), self.max_grad_norm)
+        self.adapt_optim.step()
+        return adapt_loss
 
     def restore_savestate(self, checkpoint):
-        model = ActorCritic(self.obs_dim, self.act_dim)
+        model = ActorCriticWithEncoder(self.obs_dim, self.act_dim)
         model.restore_savestate(checkpoint)
         self.policy = model
 
@@ -192,26 +272,22 @@ class PPO:
             env = self.env_class(num_envs=val_iter,should_record='True')
         else:
             env = self.env_class(num_envs=val_iter)
-        val_rews = []
-        val_dur = []
         obs, done  = env.reset()
 
-        t = np.array([0]*val_iter)
-        ep_ret = np.array([0.]*val_iter)
+        t = np.array([0]*val_iter, dtype=float)
+        ep_ret = np.array([0]*val_iter, dtype=float)
         t_sim = 0
 
         while not all(done) and t_sim <= self.num_steps:
             t_sim+=1
-            not_done = np.array([1]*val_iter) - done
+            not_done = np.array([1]*val_iter, dtype=float) - done
             t += not_done
             action = self.policy.sample_action(torch.Tensor(obs).to(self.device))
             obs, rew, next_done = env.step(action.cpu().numpy())
             done |= next_done
             ep_ret += rew * not_done
             
-        val_rews.append(ep_ret)
-        val_dur.append(t)
-        return val_rews,  val_dur
+        return np.mean(ep_ret),  np.mean(t)
 
     def test(self):
         self.policy.cpu()
@@ -248,7 +324,8 @@ class PPO:
             return f'./ppo_checkpoints/{wandb.run.name}/ppo_policy_{iteration}.pth'
 
     def _log_summary(self):
-        lr = self.logger['lr']
+        actor_lr = self.logger['actor_lr']
+        critic_lr = self.logger['critic_lr']
         delta_t = self.logger['delta_t']
         self.logger['delta_t'] = time.time_ns()
         delta_t = (self.logger['delta_t'] - delta_t) / 1e9
@@ -259,6 +336,7 @@ class PPO:
         i_so_far = self.logger['i_so_far']
         avg_ep_rews = self.logger['batch_rews'].item()
         avg_actor_loss = np.mean([losses for losses in self.logger['actor_losses']])
+        avg_critic_loss = np.mean([losses for losses in self.logger['critic_losses']])
         avg_kl = np.mean([kl for kl in self.logger['kls']])
 
         #log to wandb
@@ -266,8 +344,10 @@ class PPO:
             self.summary_writter.save_dict({
                 "simulated_iterations": i_so_far,
                 "average_episode_rewards": avg_ep_rews,
-                "average_loss": avg_actor_loss,
-                "learning_rate": lr,
+                "average_actor_loss": avg_actor_loss,
+                "average_critic_loss": avg_critic_loss,
+                "actor_learning_rate": actor_lr,
+                "critic_learning_rate": critic_lr,
                 "iteration_compute": delta_t
             })
 
@@ -277,16 +357,18 @@ class PPO:
         print(flush=True)
         print(f"-------------------- Iteration #{i_so_far} --------------------", flush=True)
         print(f"Average Episodic Return: {avg_ep_rews}", flush=True)
-        print(f"Average Loss: {avg_actor_loss}", flush=True)
+        print(f"Average Actor Loss: {avg_actor_loss}", flush=True)
+        print(f"Average Critic Loss: {avg_critic_loss}", flush=True)
         print(f"Average KL Divergence: {avg_kl}", flush=True)
         print(f"Iteration took: {delta_t} secs, of which rollout took {rollout_t} secs and gradient updates took {grad_t} secs", flush=True)
-        print(f"Current learning rate: {lr}", flush=True)
+        print(f"Current actor learning rate: {actor_lr}", flush=True)
+        print(f"Current critic learning rate: {critic_lr}", flush=True)
 
         if(self.logger['val_rew'] is not None):
             avg_val_rews = str(round(self.logger['val_rew'], 2))
             val_durs = self.logger['val_dur']
-            print(f"Average Validation Return: {avg_val_rews} secs", flush=True)
-            print(f"Average Validation Duration: {val_durs}", flush=True)
+            print(f"Average Validation Return: {avg_val_rews}", flush=True)
+            print(f"Average Validation Duration: {val_durs} secs", flush=True)
 
             if self.summary_writter is not None:
                 self.summary_writter.save_dict({
@@ -298,5 +380,40 @@ class PPO:
             self.logger['val_rew'] = None
 
 
+        print(f"------------------------------------------------------", flush=True)
+        print(flush=True)
+
+    def _log_summary_adp(self):
+        adp_lr = self.logger['adp_lr']
+        delta_t = self.logger['delta_t']
+        self.logger['delta_t'] = time.time_ns()
+        delta_t = (self.logger['delta_t'] - delta_t) / 1e9
+        delta_t = str(round(delta_t, 2))
+        rollout_t = str(round(self.logger['rollout_compute'], 2))
+        grad_t = str(round(self.logger['grad_compute'], 2))
+
+        i_so_far = self.logger['i_so_far']
+        avg_ep_rews = self.logger['batch_rews'].item()
+        avg_loss = np.mean([losses for losses in self.logger['adp_losses']])
+
+        #log to wandb
+        if self.summary_writter is not None:
+            self.summary_writter.save_dict({
+                "simulated_iterations": i_so_far,
+                "average_episode_rewards": avg_ep_rews,
+                "average_adapt_loss": avg_loss,
+                "adp_learning_rate": adp_lr,
+                "iteration_compute": delta_t
+            })
+
+        avg_ep_rews = str(round(avg_ep_rews, 2))
+        avg_actor_loss = str(round(avg_actor_loss, 5))
+
+        print(flush=True)
+        print(f"-------------------- Iteration #{i_so_far} --------------------", flush=True)
+        print(f"Average Episodic Return: {avg_ep_rews}", flush=True)
+        print(f"Average adp Loss: {avg_actor_loss}", flush=True)
+        print(f"Iteration took: {delta_t} secs, of which rollout took {rollout_t} secs and gradient updates took {grad_t} secs", flush=True)
+        print(f"Current adp learning rate: {adp_lr}", flush=True)
         print(f"------------------------------------------------------", flush=True)
         print(flush=True)

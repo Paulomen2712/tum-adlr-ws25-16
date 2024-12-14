@@ -77,7 +77,7 @@ class LunarContinuous(VectorEnvironment):
     
     def reset(self):
         obs, _ = super().reset()
-        done = np.array([False]*self.num_envs, dtype=float) # done is always false after reset
+        done = np.array([False]*self.num_envs) # done is always false after reset
         return obs, done
     
     def step(self, action):
@@ -91,7 +91,10 @@ class LunarLanderWithKnownWind(LunarContinuous):
         OpenAi Lunar Continuous Environment Wrapper that adds the wind to the observation space.
     """
     def __init__(self, **args):
-        super().__init__(**args)
+        config = self.load_hyperparameters()
+        min_wind_power = config.get('min_wind_power', 15)
+        max_wind_power = config.get('max_wind_power', 50)
+        super().__init__( **args, min_wind_power=min_wind_power, max_wind_power=max_wind_power)
 
     def _make_environment(self, **args):
         return LunarLanderWithWind(**args)

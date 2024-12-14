@@ -1,5 +1,5 @@
 import torch
-from model.network import ActorCritic
+from networks.policy import ActorCritic
 from env.wrappers import LunarContinuous
 import torch.nn as nn
 import numpy as np
@@ -24,8 +24,8 @@ class PPO:
         # Initialize hyperparameters for training with PPO
         self.summary_writter = summary_writter
         self._init_hyperparameters(hyperparameters)
-
-        self.storage = Storage(self.num_steps, self.num_envs, self.obs_dim, self.act_dim, self.gamma, self.lam)
+        self.device = 'cuda'
+        self.storage = Storage(self.num_steps, self.num_envs, self.obs_dim, self.act_dim, self.gamma, self.lam, self.device )
 
         # Initialize actor and critic
         self.policy = policy_class(self.obs_dim, self.act_dim, lr=self.lr, gamma=self.lr_gamma)
@@ -42,7 +42,7 @@ class PPO:
 
         self.actor_scheduler = self.policy.actor_scheduler
         self.critic_scheduler = self.policy.actor_optim
-        self.device = torch.device('cuda')
+        
         self.policy.to(self.device)
 
         self.logger = {
@@ -68,7 +68,7 @@ class PPO:
 
         for it in range(0, self.base_train_it): 
             if self.anneal_lr:
-                frac = it / self.base_train_it 
+                frac = it / (self.base_train_it + self.anneal_discount)
                 new_lr = self.lr * (1.0 - frac)
 
                 new_lr = max(new_lr, 0.0)
@@ -139,7 +139,7 @@ class PPO:
         self.lr = init_lr
         for ad_it in range(0, self.adp_train_it):
             if self.anneal_lr:
-                frac = ad_it / self.adp_train_it 
+                frac = ad_it / (self.adp_train_it + self.anneal_discount) 
                 new_lr = self.lr * (1.0 - frac)
 
                 new_lr = max(new_lr, 0.0)
@@ -153,7 +153,6 @@ class PPO:
             rollout_end = time.time_ns() 
 
             self.logger['i_so_far'] = it + 1
-            self.logger['batch_rews'] = self.storage.get_average_episode_rewards()
             self.logger['rollout_compute'] = (rollout_end - rollout_start) / 1e9
 
 
@@ -205,6 +204,7 @@ class PPO:
             next_obs, rewards, next_done = self.env.step(actions.cpu().numpy())
 
             self.storage.store_batch(obs, actions, logprobs, rewards, values, dones)
+        self.storage.compute_advantages(self.policy.get_value(torch.from_numpy(next_obs).to(self.device)), next_done)
         return self.storage.get_rollot_data()
 
     def adpt_rollout(self):
@@ -219,6 +219,7 @@ class PPO:
             next_obs, rewards, next_done = self.env.step(actions.cpu().numpy())
 
             self.storage.store_batch(obs, actions, logprobs, rewards, values, dones)
+        return self.storage.g
 
     def update_actor(self, pred_log_probs, log_probs, advantages):
         log_ratios = pred_log_probs - log_probs
@@ -350,8 +351,8 @@ class PPO:
         if(self.logger['val_rew'] is not None):
             avg_val_rews = str(round(self.logger['val_rew'], 2))
             val_durs = self.logger['val_dur']
-            print(f"Average Validation Return: {avg_val_rews} secs", flush=True)
-            print(f"Average Validation Duration: {val_durs}", flush=True)
+            print(f"Average Validation Return: {avg_val_rews}", flush=True)
+            print(f"Average Validation Duration: {val_durs} secs", flush=True)
 
             if self.summary_writter is not None:
                 self.summary_writter.save_dict({

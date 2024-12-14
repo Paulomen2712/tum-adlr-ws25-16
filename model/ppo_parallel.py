@@ -1,6 +1,8 @@
 import torch
 from model.network import ActorCritic
 from env.wrappers import LunarContinuous
+from torch.distributions import MultivariateNormal
+from env.wrappers import LunarContinuous
 import torch.nn as nn
 import numpy as np
 import time
@@ -15,6 +17,11 @@ class PPO:
         """
 			Initializes the PPO model, including hyperparameters.
 		"""
+
+        # Extract environment information
+        self.env = env()
+        self.obs_dim, self.act_dim =  self.env.get_environment_shape()
+
         # Extract environment information
         self.env = env()
         self.obs_dim, self.act_dim =  self.env.get_environment_shape()
@@ -66,7 +73,9 @@ class PPO:
 
             self.logger['t_so_far'] = t_sim
             self.logger['i_so_far'] = iteration
+            self.logger['actor_losses'] = []
 
+            returns = advantages + self.policy.get_value(obs)
             returns = advantages + self.policy.get_value(obs).squeeze()
             A_k = (advantages - advantages.mean()) / (advantages.std() + 1e-10)
 
@@ -99,6 +108,29 @@ class PPO:
                     batch_log_probs = log_probs[idx]
                     batch_advantages = A_k[idx]
                     batch_returns = returns[idx]
+                    V, predicted_batch_log_probs = self.policy.evaluate(batch_obs, batch_acts)
+                    ratios = torch.exp(predicted_batch_log_probs - batch_log_probs)
+
+                    #Calculate losses
+                    surr1 = ratios * batch_advantages
+                    surr2 = torch.clamp(ratios, 1 - self.clip, 1 + self.clip) * batch_advantages
+
+                    actor_loss = (-torch.min(surr1, surr2)).mean()
+                    critic_loss = nn.MSELoss()(V, batch_returns)
+
+                    #Backprop
+                    self.actor_optim.zero_grad()
+                    actor_loss.backward(retain_graph=True)
+                    if self.clip_grad:
+                        nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
+                    self.actor_optim.step()
+                    
+                    self.critic_optim.zero_grad()
+                    critic_loss.backward()
+                    if self.clip_grad:
+                        nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
+                    self.critic_optim.step()
+                    self.logger['actor_losses'].append(actor_loss.detach())
                     batch_values, pred_batch_log_probs = self.policy.evaluate(batch_obs, batch_acts)
                     
                     actor_loss, kl = self.update_actor(pred_batch_log_probs, batch_log_probs, batch_advantages)
@@ -120,6 +152,8 @@ class PPO:
                 save_path = self._get_save_path(iteration)
                 os.makedirs(os.path.dirname(save_path), exist_ok=True)
                 self.policy.store_savestate(save_path)
+
+        #t
 
     def rollout(self):
         """
@@ -161,6 +195,7 @@ class PPO:
                 ep_dones.append(done)
 
                 action, log_prob, val = self.policy.act(obs)
+                action, log_prob, val = self.policy.act(obs)
                 obs, rew, done = self.env.step(action)
 
                 ep_rews.append(rew)
@@ -172,7 +207,7 @@ class PPO:
                     break
             
             batch_lens.append(ep_t + 1)
-            batch_rews.append(ep_rews)
+            batch_rews.append(np.sum(ep_rews))
             batch_vals.append(ep_vals)
             batch_dones.append(ep_dones)
             batch_advantages.extend(self.gae(ep_rews, ep_vals, ep_dones))
@@ -250,8 +285,8 @@ class PPO:
 
                 while not done:
                     t += 1
-                    action = self.actor(obs)
-                    obs, rew, done = env.step(action.detach().numpy())
+                    action = self.policy.sample_action(obs)
+                    obs, rew, done = env.step(action)
 
                     ep_ret += rew
                     
@@ -265,20 +300,22 @@ class PPO:
         while True:
                 obs, done = env.reset()
                 while not done:
-                    action = self.actor(obs)
-                    obs, _, done = env.step(action.detach().numpy())
+                    action = self.policy.sample_action(obs)
+                    obs, _, done = env.step(action)
 
     def _init_hyperparameters(self, hyperparameters):
         """
             Initialize default and custom values for hyperparameters
         """
+        for param, val in self.env.load_hyperparameters().items():
+            setattr(self, param, val)
 
         config_hyperparameters = self.env.load_hyperparameters()
         for param, val in config_hyperparameters.items():
             setattr(self, param, val)
 
         for param, val in hyperparameters.items():
-            exec('self.' + param + ' = ' + str(val))
+            setattr(self, param, val)
 
         if self.seed != None:
             assert(type(self.seed) == int)
@@ -305,6 +342,8 @@ class PPO:
         t_so_far = self.logger['t_so_far']
         i_so_far = self.logger['i_so_far']
         avg_ep_lens = np.mean(self.logger['batch_lens'])
+        avg_ep_rews = np.mean(self.logger['batch_rews'])
+        avg_actor_loss = np.mean([losses.float().mean() for losses in self.logger['actor_losses']])
         avg_ep_rews = np.mean([np.sum(ep_rews) for ep_rews in self.logger['batch_rews']])
         avg_actor_loss = np.mean(self.logger['actor_losses'])
         avg_kl = np.mean(self.logger['kls'])
