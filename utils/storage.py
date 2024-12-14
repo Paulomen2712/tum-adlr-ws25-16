@@ -29,7 +29,7 @@ class Storage():
         self.obs[self.step].copy_(torch.from_numpy(obs).to(self.device))
         self.actions[self.step].copy_(actions)
         self.rewards[self.step].copy_(torch.from_numpy(rewards).to(self.device))
-        self.dones[self.step].copy_(torch.from_numpy(np.array(dones, dtype=float)).to(self.device))
+        self.dones[self.step].copy_(torch.from_numpy(dones).to(self.device))
         self.values[self.step].copy_(values)
         self.logprobs[self.step].copy_(logprobs.to(self.device))
         self.step += 1
@@ -71,5 +71,8 @@ class Storage():
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-10)
         return  obs, actions, logprobs, advantages, returns
      
+    def store_values( self, values):
+        self.values[self.step].copy_(values)
+        step+=1
     def get_values(self):
         return self.values.transpose(0,1).flatten()

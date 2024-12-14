@@ -63,14 +63,10 @@ class ActorCritic(nn.Module):
         # Critic network (outputs value estimate)
         self.critic = FNN(obs_dim, 1, hidden_dim)
 
-        self.actor_logstd = nn.Parameter(torch.zeros(1, action_dim))
+        self.register_buffer('cov_var', torch.full(size=(action_dim,), fill_value=std))
+        self.register_buffer('cov_mat', torch.diag(self.cov_var))
 
-        # self.cov_var = torch.full(size=(action_dim,), fill_value=std)
-        # self.cov_mat = torch.diag(self.cov_var)
-        # self.register_buffer('cov_var', torch.full(size=(action_dim,), fill_value=std))
-        # self.register_buffer('cov_mat', torch.diag(self.cov_var))
-
-        self.actor_optim = optim.Adam([*self.actor.parameters(),self.actor_logstd], lr=lr)
+        self.actor_optim = optim.Adam(self.actor.parameters(), lr=lr)
         self.critic_optim = optim.Adam(self.critic.parameters(), lr=lr)
 
         # self.actor_scheduler= optim.lr_scheduler.StepLR(self.actor_optim, step_size = 1, gamma=gamma)
@@ -90,20 +86,16 @@ class ActorCritic(nn.Module):
             Samples an action from the actor/critic network.
         """
         mean, values = self.actor(obs), self.critic(obs)
-        action_logstd = self.actor_logstd.expand_as(mean)
-        action_std = torch.exp(action_logstd)
-        dist = Normal(mean, action_std)
+        dist = MultivariateNormal(mean, self.cov_mat)
         action = dist.sample()
         log_prob = dist.log_prob(action)
 
-        return action, log_prob.sum(1), values.view(-1)
+        return action, log_prob, values.view(-1)
     
     @torch.no_grad()
     def sample_action(self, obs):
         mean = self.actor(obs)
-        action_logstd = self.actor_logstd.expand_as(mean)
-        action_std = torch.exp(action_logstd)
-        dist = Normal(mean, action_std)
+        dist = MultivariateNormal(mean, self.cov_mat)
         return dist.sample()
 
     def evaluate(self, obs, acts):
@@ -112,12 +104,10 @@ class ActorCritic(nn.Module):
             each action given the batch observations and actions. 
         """
         mean, values = self.actor(obs), self.critic(obs)
-        action_logstd = self.actor_logstd.expand_as(mean)
-        action_std = torch.exp(action_logstd)
-        dist = Normal(mean, action_std)
+        dist = MultivariateNormal(mean, self.cov_mat)
         log_probs = dist.log_prob(acts)
 
-        return values.squeeze(), log_probs.sum(1)
+        return values.squeeze(), log_probs
     
     def store_savestate(self, checkpoint_path):
         """
@@ -147,21 +137,3 @@ class ActorCritic(nn.Module):
         self.actor_scheduler.load_state_dict(checkpoint['actor_scheduler_state_dict'])
         self.critic_scheduler.load_state_dict(checkpoint['critic_scheduler_state_dict'])
         print(f"Checkpoint restored from {checkpoint_path}")
-
-class AdaptiveScheduler(object):
-    # from https://github.com/leggedrobotics/rsl_rl/blob/master/rsl_rl/algorithms/ppo.py
-    def __init__(self, policy_optim, kl_threshold=0.02):
-        super().__init__()
-        self.min_lr = 1e-6
-        self.max_lr = 1e-2
-        self.kl_threshold = kl_threshold
-        self.policy_optim = policy_optim
-
-    def update(self, current_lr, kl_dist):
-        lr = current_lr
-        if kl_dist > (2.0 * self.kl_threshold):
-            lr = max(current_lr / 1.5, self.min_lr)
-        if kl_dist < (0.5 * self.kl_threshold):
-            lr = min(current_lr * 1.5, self.max_lr)
-        # self.policy_optim.param_groups[0]["lr"] = lr
-        return lr

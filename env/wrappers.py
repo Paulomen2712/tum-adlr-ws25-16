@@ -77,7 +77,7 @@ class LunarContinuous(VectorEnvironment):
     
     def reset(self):
         obs, _ = super().reset()
-        done = [False]*self.num_envs # done is always false after reset
+        done = np.array([False]*self.num_envs, dtype=float) # done is always false after reset
         return obs, done
     
     def step(self, action):

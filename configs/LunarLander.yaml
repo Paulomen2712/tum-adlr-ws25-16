@@ -21,7 +21,7 @@ max_grad_norm: 0.5                       # Gradient clipping threshold
 value_loss_norm: 0.5
 lr_gamma: 0.995                          # Gamma for scheduler
 n_sgd_batches: 64                         # Number of batches for sgd
-anneal_lr: False
+anneal_lr: True
 
 val_freq: 10
 val_iter: 5
