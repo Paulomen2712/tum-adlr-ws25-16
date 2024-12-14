@@ -1,5 +1,5 @@
 import torch
-from networks.policy import ActorCritic
+from networks.actorcritic import ActorCritic
 from env.wrappers import LunarContinuous
 import torch.nn as nn
 import numpy as np
