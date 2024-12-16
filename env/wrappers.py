@@ -32,11 +32,11 @@ class VectorEnvironment(SyncVectorEnv):
         """
         pass  # Placeholder for environment-specific implementation
     
-    def make_environment_for_recording(self, env_id, episode_trigger=lambda _: True):
+    def make_environment_for_recording(self, env_id, episode_trigger=lambda _: True, **args):
         """
             Additionally wraps the environment for recording.
         """
-        return RecordVideo(self._make_environment(render_mode = 'rgb_array'), video_folder="videos", name_prefix=f'rl-video{env_id}', episode_trigger=episode_trigger)
+        return RecordVideo(self._make_environment(render_mode = 'rgb_array', **args), video_folder="videos", name_prefix=f'rl-video{env_id}', episode_trigger=episode_trigger)
 
     def load_hyperparameters(self):
         with open(self._get_config_path(), 'r') as f:
