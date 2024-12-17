@@ -32,7 +32,7 @@ class VectorEnvironment(SyncVectorEnv):
         """
         pass  # Placeholder for environment-specific implementation
     
-    def make_environment_for_recording(self, env_id, episode_trigger=lambda _: True):
+    def make_environment_for_recording(self, env_id, episode_trigger=lambda _: True, min_wind_power=15, max_wind_power=50):
         """
             Additionally wraps the environment for recording.
         """

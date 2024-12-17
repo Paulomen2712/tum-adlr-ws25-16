@@ -1,6 +1,7 @@
 import torch
 from networks.base_policy import ActorCriticWithEncoder
 from networks.adaptive_module import AdaptiveActorCritic
+# from networks.adaptive_module_2 import AdaptiveActorCritic
 from env.wrappers import LunarContinuous
 import torch.nn as nn
 import numpy as np
@@ -57,7 +58,8 @@ class PPO:
             'kls': [],
             'actor_lr': self.actor_lr,           # current learning rate
             'critic_lr': self.critic_lr,
-            'adp_lr': self.adp_lr 
+            'adp_lr': self.adp_lr,
+            'max_val_rew': 0
 		}
 
     def train(self):
@@ -154,7 +156,8 @@ class PPO:
                 self.adp_lr = adp_lr
                 self.logger['adp_lr'] = self.adp_lr = adp_lr
 
-            rollout_start = time.time_ns()  
+            rollout_start = time.time_ns() 
+            self.adapt_policy.clear_history()
             obs, values = self.adpt_rollout()
             rollout_end = time.time_ns() 
 
@@ -252,6 +255,14 @@ class PPO:
         return critic_loss
 
     def update_adpt(self,  pred_values, values):
+        pred_size = pred_values.shape[0]
+        values_size = values.shape[0]
+
+        if pred_size > values_size:
+            padding_size = pred_size - values_size
+            padding = torch.zeros(padding_size, device=values.device)  # Create padding with zeros
+            values = torch.cat([values, padding], dim=0)  # Concatenate the padding along the first dimension
+
         adapt_loss = nn.MSELoss()(pred_values.squeeze(), values.squeeze())
         
         self.adapt_optim.zero_grad()
@@ -265,12 +276,13 @@ class PPO:
         model.restore_savestate(checkpoint)
         self.policy = model
 
-    def validate(self, val_iter, should_record=False, use_adaptive=False):
+    def validate(self, val_iter, should_record=False, use_adaptive=False, interupt=True):
         if should_record:
             env = self.env_class(num_envs=val_iter,should_record='True')
         else:
             env = self.env_class(num_envs=val_iter)
         if use_adaptive:
+            self.adapt_policy.clear_history()
             policy = self.adapt_policy
         else:
             policy = self.policy
@@ -280,7 +292,9 @@ class PPO:
         ep_ret = np.array([0]*val_iter, dtype=float)
         t_sim = 0
 
-        while not all(done) and t_sim <= self.num_steps:
+        max_steps = self.num_steps if interupt else 2500
+
+        while not all(done) and t_sim <= max_steps:
             t_sim+=1
             not_done = np.array([1]*val_iter, dtype=float) - done
             t += not_done
@@ -289,7 +303,7 @@ class PPO:
             done |= next_done
             ep_ret += rew * not_done
             
-        return np.mean(ep_ret),  np.mean(t)
+        return (np.mean(ep_ret), np.mean(t)) if interupt else (ep_ret, t)
 
     def test(self, use_adaptive=True):
         if use_adaptive:
@@ -344,6 +358,8 @@ class PPO:
         avg_critic_loss = np.mean([losses for losses in self.logger['critic_losses']])
         avg_kl = np.mean([kl for kl in self.logger['kls']])
 
+
+
         #log to wandb
         if self.summary_writter is not None:
             self.summary_writter.save_dict({
@@ -369,6 +385,7 @@ class PPO:
         print(f"Current actor learning rate: {actor_lr}", flush=True)
         print(f"Current critic learning rate: {critic_lr}", flush=True)
 
+
         if(self.logger['val_rew'] is not None):
             avg_val_rews = str(round(self.logger['val_rew'], 2))
             val_durs = self.logger['val_dur']
@@ -378,7 +395,7 @@ class PPO:
             if self.summary_writter is not None:
                 self.summary_writter.save_dict({
                     "val_rews": self.logger['val_rew'],
-                    "val_durs": self.logger['val_dur']
+                    "val_durs": self.logger['val_dur'],
                 })
 
             self.logger['val_dur'] = None

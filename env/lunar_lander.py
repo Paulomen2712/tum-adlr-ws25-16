@@ -17,7 +17,7 @@ class LunarLanderWithWind(LunarLander):
         Custom LunarLander environment with wind turbulence.
     """
 
-    def __init__(self, min_wind_power = 15., max_wind_power=50., render_mode=None):
+    def __init__(self, min_wind_power = 15., max_wind_power=50., render_mode=None, wind_power=15):
         self.max_wind_power = max_wind_power
         self.min_wind_power = min_wind_power
         super().__init__(render_mode=render_mode, continuous=True, enable_wind=True)
@@ -58,7 +58,7 @@ class LunarLanderWithWind(LunarLander):
 
         # useful range is -1 .. +1, but spikes can be higher
         self.observation_space = spaces.Box(low, high)
-        self.wind_power = self.sample_wind()
+        self.wind_power = self.sample_wind() if not wind_power else wind_power
         
 
     def get_wind_mag(self):
