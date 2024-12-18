@@ -34,19 +34,16 @@ class Storage():
         self.logprobs[self.step].copy_(logprobs.to(self.device))
         self.step += 1
 
-    def compute_advantages(self, next_value, next_done):
-        next_value = next_value.reshape(1, -1)
-        next_done = torch.Tensor(next_done).to(self.device)
+    def compute_advantages(self, next_value):
         last_lam = 0
+        not_dones = 1.0 - self.dones
         for t in reversed(range(self.num_steps)):
             if t == self.num_steps - 1:
-                next_non_terminal = 1.0 - next_done
                 next_values = next_value
             else:
-                next_non_terminal = 1.0 - self.dones[t + 1]
                 next_values = self.values[t + 1]
-            delta = self.rewards[t] + self.gamma * next_values * next_non_terminal - self.values[t]
-            self.advantages[t] = last_lam = delta + self.gamma * self.lam * next_non_terminal * last_lam
+            delta = self.rewards[t] + self.gamma * next_values * not_dones[t] - self.values[t]
+            self.advantages[t] = last_lam = delta + self.gamma * self.lam * not_dones[t] * last_lam
 
     def clear(self):
         self.step = 0
@@ -70,10 +67,7 @@ class Storage():
         advantages = self.advantages.transpose(0,1).flatten()
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-10)
         return  obs, actions, logprobs, advantages, returns
-     
-    def store_values( self, values):
-        self.values[self.step].copy_(values)
-        step+=1
+    
     def get_values(self):
         return self.values.transpose(0,1).flatten()
     

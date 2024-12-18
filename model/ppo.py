@@ -28,7 +28,7 @@ class PPO:
         self.storage = Storage(self.num_steps, self.num_envs, self.obs_dim, self.act_dim, self.gamma, self.lam, self.device )
 
         # Initialize actor and critic
-        self.policy = policy_class(self.obs_dim, self.act_dim, lr=self.lr, gamma=self.lr_gamma)
+        self.policy = policy_class(self.obs_dim, self.act_dim, hidden_dims=self.policy_hidden_dims, lr=self.lr, gamma=self.lr_gamma)
         self.actor = self.policy.actor                                              
         self.critic = self.policy.critic
         self.base_encoder = None
@@ -64,7 +64,6 @@ class PPO:
         """
         self.policy.train()
         self.logger['delta_t'] = time.time_ns()
-        init_lr = self.lr
 
         for it in range(0, self.base_train_it): 
             if self.anneal_lr:
@@ -118,7 +117,6 @@ class PPO:
 
                 self.logger['actor_losses'].append(np.mean(loss))
                 self.logger['kls'].append(np.mean(kls))
-            # self.logger['lr'] = self.actor_scheduler.get_last_lr()[0]
 
             grad_end = time.time_ns()
             self.logger['grad_compute'] = (grad_end - grad_start) / 1e9
@@ -136,52 +134,7 @@ class PPO:
                 save_path = self._get_save_path(it+1)
                 os.makedirs(os.path.dirname(save_path), exist_ok=True)
                 self.policy.store_savestate(save_path)
-        self.lr = init_lr
-        for ad_it in range(0, self.adp_train_it):
-            if self.anneal_lr:
-                frac = ad_it / (self.adp_train_it + self.anneal_discount) 
-                new_lr = self.lr * (1.0 - frac)
-
-                new_lr = max(new_lr, 0.0)
-                self.adapt_optim.param_groups[0]["lr"] = new_lr
-                # Log learning rate
-                self.lr = new_lr
-                self.logger['lr'] = self.lr
-
-            rollout_start = time.time_ns()  
-            values = self.adpt_rollout()
-            rollout_end = time.time_ns() 
-
-            self.logger['i_so_far'] = it + 1
-            self.logger['rollout_compute'] = (rollout_end - rollout_start) / 1e9
-
-
-            batch_size = values.size(0)
-            inds = np.arange(batch_size)
-            sgdbatch_size = batch_size // self.n_sgd_batches
-            loss = []
-            kls = []
-
-            grad_start = time.time_ns() 
-            for _ in range(self.n_updates_per_iteration): 
-
-                #SGD
-                np.random.shuffle(inds)
-                for start in range(0, batch_size, sgdbatch_size):
-                    end = start + sgdbatch_size
-                    idx = inds[start:end]
-                    
-                    #Restrict data to current batch
-                    batch_values = values[idx]
-                    pred_batch_values, _ = self.policy.evaluate(batch_obs, batch_acts)
-                    
-                    actor_loss, kl = self.update_actor(pred_batch_log_probs, batch_log_probs, batch_advantages)
-                    self.adpt(batch_values, pred_batch_values)
-
-
-            grad_end = time.time_ns()
-            self.logger['grad_compute'] = (grad_end - grad_start) / 1e9
-
+       
     def rollout(self):
         """
             Collects batch of simulated data.
@@ -195,31 +148,16 @@ class PPO:
         """
         self.storage.clear()
 
-        next_obs, next_done = self.env.reset()
+        next_obs, _ = self.env.reset()
         for _ in range(self.num_steps):
             obs = next_obs.copy() 
-            dones = next_done.copy() 
 
             actions, logprobs, values = self.policy.act(torch.from_numpy(next_obs).to(self.device))
-            next_obs, rewards, next_done = self.env.step(actions.cpu().numpy())
+            next_obs, rewards, dones = self.env.step(actions.cpu().numpy())
 
             self.storage.store_batch(obs, actions, logprobs, rewards, values, dones)
-        self.storage.compute_advantages(self.policy.get_value(torch.from_numpy(next_obs).to(self.device)), next_done)
+        self.storage.compute_advantages(self.policy.get_value(torch.from_numpy(next_obs).to(self.device)))
         return self.storage.get_rollot_data()
-
-    def adpt_rollout(self):
-        self.storage.clear()
-
-        next_obs, next_done = self.env.reset()
-        for _ in range(self.num_steps):
-            obs = next_obs.copy() 
-            dones = next_done.copy() 
-
-            actions, logprobs, values = self.policy.act(torch.from_numpy(next_obs).to(self.device))
-            next_obs, rewards, next_done = self.env.step(actions.cpu().numpy())
-
-            self.storage.store_batch(obs, actions, logprobs, rewards, values, dones)
-        return self.storage.g
 
     def update_actor(self, pred_log_probs, log_probs, advantages):
         log_ratios = pred_log_probs - log_probs
@@ -244,14 +182,6 @@ class PPO:
         nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
         self.critic_optim.step()
 
-    def update_adpt(self,  pred_values, values):
-        adapt_loss = nn.MSELoss()(pred_values.squeeze(), values.squeeze())
-        
-        self.adapt_optim.zero_grad()
-        adapt_loss.backward()
-        nn.utils.clip_grad_norm_(self.adapt_encoder.parameters(), self.max_grad_norm)
-        self.adapt_optim.step()
-
     def restore_savestate(self, checkpoint):
         model = ActorCritic(self.obs_dim, self.act_dim)
         model.restore_savestate(checkpoint)
@@ -262,23 +192,24 @@ class PPO:
             env = self.env_class(num_envs=val_iter,should_record='True')
         else:
             env = self.env_class(num_envs=val_iter)
+        policy = self.policy
         obs, done  = env.reset()
 
         t = np.array([0]*val_iter, dtype=float)
         ep_ret = np.array([0]*val_iter, dtype=float)
         t_sim = 0
-
         while not all(done) and t_sim <= self.num_steps:
             t_sim+=1
             not_done = np.array([1]*val_iter, dtype=float) - done
             t += not_done
-            action = self.policy.sample_action(torch.Tensor(obs).to(self.device))
+            action = policy.sample_action(torch.Tensor(obs).to(self.device))
             obs, rew, next_done = env.step(action.cpu().numpy())
             done |= next_done
             ep_ret += rew * not_done
             
+        env.close()
         return np.mean(ep_ret),  np.mean(t)
-
+    
     def test(self):
         self.policy.cpu()
         env = self.env_class(num_envs=1,render_mode='human')
@@ -318,7 +249,6 @@ class PPO:
         delta_t = self.logger['delta_t']
         self.logger['delta_t'] = time.time_ns()
         delta_t = (self.logger['delta_t'] - delta_t) / 1e9
-        delta_t = str(round(delta_t, 2))
         rollout_t = str(round(self.logger['rollout_compute'], 2))
         grad_t = str(round(self.logger['grad_compute'], 2))
 
@@ -336,7 +266,7 @@ class PPO:
                 "learning_rate": lr,
                 "iteration_compute": delta_t
             })
-
+        delta_t = str(round(delta_t, 2))
         avg_ep_rews = str(round(avg_ep_rews, 2))
         avg_actor_loss = str(round(avg_actor_loss, 5))
 

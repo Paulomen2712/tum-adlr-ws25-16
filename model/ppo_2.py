@@ -202,16 +202,15 @@ class PPO:
         """
         self.storage.clear()
 
-        next_obs, next_done = self.env.reset()
+        next_obs, _ = self.env.reset()
         for _ in range(self.num_steps):
             obs = next_obs.copy() 
-            dones = next_done.copy() 
 
             actions, logprobs, values = self.policy.act(torch.from_numpy(next_obs).to(self.device))
-            next_obs, rewards, next_done = self.env.step(actions.cpu().numpy())
+            next_obs, rewards, dones = self.env.step(actions.cpu().numpy())
 
             self.storage.store_batch(obs, actions, logprobs, rewards, values, dones)
-        self.storage.compute_advantages(self.policy.get_value(torch.from_numpy(next_obs).to(self.device)), next_done)
+        self.storage.compute_advantages(self.policy.get_value(torch.from_numpy(next_obs).to(self.device)))
         return self.storage.get_rollot_data()
 
     def adpt_rollout(self):
@@ -279,7 +278,7 @@ class PPO:
         t = np.array([0]*val_iter, dtype=float)
         ep_ret = np.array([0]*val_iter, dtype=float)
         t_sim = 0
-
+    
         while not all(done) and t_sim <= self.num_steps:
             t_sim+=1
             not_done = np.array([1]*val_iter, dtype=float) - done
@@ -288,6 +287,8 @@ class PPO:
             obs, rew, next_done = env.step(action.cpu().numpy())
             done |= next_done
             ep_ret += rew * not_done
+
+        env.close()
             
         return np.mean(ep_ret),  np.mean(t)
 
@@ -334,7 +335,6 @@ class PPO:
         delta_t = self.logger['delta_t']
         self.logger['delta_t'] = time.time_ns()
         delta_t = (self.logger['delta_t'] - delta_t) / 1e9
-        delta_t = str(round(delta_t, 2))
         rollout_t = str(round(self.logger['rollout_compute'], 2))
         grad_t = str(round(self.logger['grad_compute'], 2))
 
@@ -355,7 +355,7 @@ class PPO:
                 "critic_learning_rate": critic_lr,
                 "iteration_compute": delta_t
             })
-
+        delta_t = str(round(delta_t, 2))
         avg_ep_rews = str(round(avg_ep_rews, 2))
         avg_actor_loss = str(round(avg_actor_loss, 5))
 
@@ -393,7 +393,6 @@ class PPO:
         delta_t = self.logger['delta_t']
         self.logger['delta_t'] = time.time_ns()
         delta_t = (self.logger['delta_t'] - delta_t) / 1e9
-        delta_t = str(round(delta_t, 2))
         rollout_t = str(round(self.logger['rollout_compute'], 2))
         grad_t = str(round(self.logger['grad_compute'], 2))
 
@@ -408,7 +407,7 @@ class PPO:
                 "adp_learning_rate": adp_lr,
                 "iteration_compute": delta_t
             })
-
+        delta_t = str(round(delta_t, 2))
         avg_loss = str(round(avg_loss, 5))
 
         print(flush=True)

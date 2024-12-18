@@ -1,7 +1,7 @@
 #Base Policy
-base_train_it: 2                      # Total iterations to train the base policy
-num_envs: 5                              # Number of independent environments to train on
-num_steps: 1200                            # Number of timesteps per environment
+base_train_it: 5                      # Total iterations to train the base policy
+num_envs: 10                             # Number of independent environments to train on
+num_steps: 500                            # Number of timesteps per environment
 
 #Adapt Module
 adp_train_it: 1                         # Total iterations to train the base policy
@@ -12,9 +12,10 @@ gamma: 0.99                               # Discount factor for the rewards
 lam: 0.95                                 # Lambda Parameter for GAE 
 
 # Backprop
-n_updates_per_iteration: 2                # Number of times to update policy per iteration
-actor_lr: 0.005                                  # Learning rate of actor optimizer
-critic_lr: 0.0075                                  # Learning rate of crritic optimizer
+lr: 2.5e-4
+n_updates_per_iteration: 4                # Number of times to update policy per iteration
+actor_lr: 0.0025                                  # Learning rate of actor optimizer
+critic_lr: 0.005                                  # Learning rate of crritic optimizer
 adp_lr: 0.005
 clip: 0.2                                 # Clip ratio for ppo loss. Using recomended 0.2
 clip_grad: True
@@ -22,17 +23,19 @@ max_grad_norm: 0.5                       # Gradient clipping threshold
 value_loss_norm: 0.5
 entropy_coef: 0.1
 lr_gamma: 0.995                          # Gamma for scheduler
-n_sgd_batches: 64                         # Number of batches for sgd
+n_sgd_batches: 4                         # Number of batches for sgd
 anneal_lr: False
 anneal_discount: 1
 
-val_freq: 2
-val_iter: 5
+val_freq: 5
+val_iter: 2
 
 min_wind_power: 5
 max_wind_power: 6
 
 # Misc parameters
-save_freq: 50                             # How often to save in number of iterations
+save_freq: 500                             # How often to save in number of iterations
 seed: ~ 
 device: 'cuda'
+
+policy_hidden_dims: [128, 64]
