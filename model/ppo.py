@@ -232,9 +232,10 @@ class PPO:
         for param, val in hyperparameters.items():
             exec('self.' + param + ' = ' + str(val))
 
+        self.base_train_it = self.total_timesteps // (self.num_envs*self.num_steps)
+
         if self.seed != None:
             assert(type(self.seed) == int)
-
             torch.manual_seed(self.seed)
             print(f"Successfully set seed to {self.seed}")
 
@@ -261,6 +262,7 @@ class PPO:
         if self.summary_writter is not None:
             self.summary_writter.save_dict({
                 "simulated_iterations": i_so_far,
+                "simulated_timesteps": i_so_far*self.num_envs*self.num_steps,
                 "average_episode_rewards": avg_ep_rews,
                 "average_loss": avg_actor_loss,
                 "learning_rate": lr,
@@ -272,6 +274,7 @@ class PPO:
 
         print(flush=True)
         print(f"-------------------- Iteration #{i_so_far} --------------------", flush=True)
+        print(f"Simulated timesteps: {i_so_far*self.num_envs*self.num_steps}")
         print(f"Average Episodic Return: {avg_ep_rews}", flush=True)
         print(f"Average Loss: {avg_actor_loss}", flush=True)
         print(f"Average KL Divergence: {avg_kl}", flush=True)

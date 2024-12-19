@@ -317,6 +317,9 @@ class PPO:
         for param, val in hyperparameters.items():
             exec('self.' + param + ' = ' + str(val))
 
+        self.base_train_it = self.total_timesteps // (self.num_envs*self.num_steps)
+        self.adp_train_it = self.adp_total_timesteps // (self.num_envs*self.adp_num_steps)
+
         if self.seed != None:
             assert(type(self.seed) == int)
 
@@ -348,6 +351,7 @@ class PPO:
         if self.summary_writter is not None:
             self.summary_writter.save_dict({
                 "simulated_iterations": i_so_far,
+                "simulated_timesteps": i_so_far*self.num_envs*self.num_steps,
                 "average_episode_rewards": avg_ep_rews,
                 "average_actor_loss": avg_actor_loss,
                 "average_critic_loss": avg_critic_loss,
@@ -361,6 +365,7 @@ class PPO:
 
         print(flush=True)
         print(f"-------------------- Iteration #{i_so_far} --------------------", flush=True)
+        print(f"Simulated timesteps: {i_so_far*self.num_envs*self.num_steps}")
         print(f"Average Episodic Return: {avg_ep_rews}", flush=True)
         print(f"Average Actor Loss: {avg_actor_loss}", flush=True)
         print(f"Average Critic Loss: {avg_critic_loss}", flush=True)
@@ -403,6 +408,7 @@ class PPO:
         if self.summary_writter is not None:
             self.summary_writter.save_dict({
                 "simulated_iterations": i_so_far,
+                "simulated_timesteps": i_so_far*self.num_envs*self.adp_num_steps,
                 "average_adapt_loss": avg_loss,
                 "adp_learning_rate": adp_lr,
                 "iteration_compute": delta_t
@@ -412,6 +418,7 @@ class PPO:
 
         print(flush=True)
         print(f"-------------------- Iteration #{i_so_far} --------------------", flush=True)
+        print(f"Simulated timesteps: {i_so_far*self.num_envs*self.adp_num_steps}")
         print(f"Average adp Loss: {avg_loss}", flush=True)
         print(f"Iteration took: {delta_t} secs, of which rollout took {rollout_t} secs and gradient updates took {grad_t} secs", flush=True)
         print(f"Current adp learning rate: {adp_lr}", flush=True)
