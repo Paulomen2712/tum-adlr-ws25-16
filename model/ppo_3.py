@@ -114,9 +114,10 @@ class PPO:
                     batch_log_probs = log_probs[idx]
                     batch_advantages = advantages[idx]
                     batch_returns = returns[idx]
-                    batch_values, pred_batch_log_probs, pred_batch_entropies = self.policy.evaluate(batch_obs, batch_acts)
+                    batch_values, pred_batch_log_probs, pred_batch_entropies, true_z, encoded_z = self.policy.evaluate(batch_obs, batch_acts)
                     
                     actor_loss, kl = self.update_actor(pred_batch_log_probs, batch_log_probs, batch_advantages, pred_batch_entropies)
+                    # actor_loss, kl = self.update_actor_v2(pred_batch_log_probs, batch_log_probs, batch_advantages, pred_batch_entropies, true_z, encoded_z)
                     critic_loss = self.update_critic(batch_values, batch_returns)
 
                     act_loss.append(actor_loss.detach().item())
@@ -184,6 +185,7 @@ class PPO:
                     batch_values = values[idx]
                     pred_batch_values = self.adapt_policy.evaluate(batch_obs)
                     
+                    # BUG: Using batch_values is wrong of the critic is wrong. Should use base_encoder Z
                     adp_loss = self.update_adpt(pred_batch_values, batch_values)
                     loss.append(adp_loss.detach().item())
                 self.logger['adp_losses'].append(np.mean(loss))
@@ -225,9 +227,11 @@ class PPO:
             obs = next_obs.copy() 
 
             actions= self.policy.sample_action(torch.from_numpy(next_obs).to(self.device))
+            z = self.policy.encode(torch.from_numpy(next_obs).to(self.device)).detach()[:, -1]
+
             next_obs, _, _ = self.env.step(actions.cpu().numpy())
 
-            self.adp_storage.store_obs(obs)
+            self.adp_storage.store_obs(obs, z)
         return self.adp_storage.get_rollot_data()
 
     def update_actor(self, pred_log_probs, log_probs, advantages, entropies):
@@ -239,6 +243,28 @@ class PPO:
             kl = ((ratios - 1) - log_ratios).mean()
         actor_loss = (torch.max(surr1, surr2)).mean()
         actor_loss -= self.entropy_coef * entropies.mean()
+        self.actor_optim.zero_grad()
+        actor_loss.backward()
+        nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
+        self.actor_optim.step()
+        return actor_loss.detach(), kl
+
+    def update_actor_v2(self, pred_log_probs, log_probs, advantages, entropies, true_z, encoded_z):
+        encoder_loss =nn.MSELoss()(true_z.squeeze(), encoded_z.squeeze())
+
+        log_ratios = pred_log_probs - log_probs
+        ratios = torch.exp(log_ratios)
+        surr1 = -ratios * advantages
+        surr2 = -torch.clamp(ratios, 1 - self.clip, 1 + self.clip) * advantages
+
+        with torch.no_grad():
+            kl = ((ratios - 1) - log_ratios).mean()
+
+        actor_loss = (torch.max(surr1, surr2)).mean()
+        actor_loss -= self.entropy_coef * entropies.mean()
+
+        actor_loss += encoder_loss
+
         self.actor_optim.zero_grad()
         actor_loss.backward()
         nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
@@ -309,6 +335,39 @@ class PPO:
             self.logger['val_rew'] = ep_ret
             
         return (np.mean(ep_ret), np.mean(t)) if interupt else (ep_ret, t)
+
+    def validate_encoders(self):
+        env = self.env_class(num_envs=1)
+        
+        random_obs = env.observation_space.sample()
+        random_obs[0, -1] = np.random.uniform(-3, 3)
+
+
+        self.adapt_policy.clear_history()
+        
+        wind_vals = []
+        base_z = []
+        adpt_z = []
+    
+        for i in range(20):
+            # Modify only the wind dimension (9th dimension)
+            wind_value = np.random.uniform(-3, 3)
+            wind_vals.append(wind_value)
+
+            modified_obs = random_obs.copy()
+            modified_obs[0, -1] = wind_value  # Update wind dimension
+            
+            # Convert to tensor and send through encoders
+            obs_tensor = torch.tensor(modified_obs, dtype=torch.float32).to(self.device)
+            base_output = self.policy.encoder(obs_tensor).cpu().detach().numpy().flatten()[0]
+            adpt_output = self.adapt_policy.encode(obs_tensor).cpu().detach().numpy().squeeze()[-1]
+            
+            base_z.append(base_output)
+            adpt_z.append(adpt_output)
+            # Log the outputs
+        
+
+        return wind_vals, base_z, adpt_z
 
     def test(self, use_adaptive=True):
         if use_adaptive:

@@ -122,12 +122,14 @@ class ActorCriticWithEncoder(AdaptivePolicy):
         self.actor_optim = optim.Adam([*self.actor.parameters(), *self.encoder.parameters()], lr=actor_lr)
         self.critic_optim = optim.Adam(self.critic.parameters(), lr=critic_lr)
 
-    def encode(self, obs):
-        masked_obs = obs.clone()
-        masked_obs = masked_obs * torch.cat([torch.ones_like(masked_obs[..., :-1]), torch.zeros_like(masked_obs[..., -1:])], dim=-1)
+    def encode(self, obs, apply_masking = False):
+        obs_clone = obs.clone()
+        if(apply_masking):
+            obs_clone = obs_clone * torch.cat([torch.ones_like(obs_clone[..., :-1]), torch.zeros_like(obs_clone[..., -1:])], dim=-1)
+
         z = self.encoder(obs)
 
-        return torch.cat([masked_obs, z], dim=-1)
+        return torch.cat([obs_clone, z], dim=-1)
 
     @torch.no_grad()
     def act(self, obs):
@@ -151,12 +153,17 @@ class ActorCriticWithEncoder(AdaptivePolicy):
             Estimates the values of each observation, and the log probs of
             each action given the batch observations and actions. 
         """
+        true_z = obs[:, -1].unsqueeze(1).flatten()
+
         ext_obs = self.encode(obs)
+
+        encoded_z = ext_obs[:, -1].unsqueeze(1).flatten()
+
         mean, values = self.actor(ext_obs), self.critic(ext_obs.detach())
         dist = MultivariateNormal(mean, self.cov_mat)
         log_probs = dist.log_prob(acts)
 
-        return values.squeeze(), log_probs, dist.entropy()
+        return values.squeeze(), log_probs, dist.entropy(), true_z, encoded_z
     
     def store_savestate(self, checkpoint_path):
         """

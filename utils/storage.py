@@ -87,11 +87,12 @@ class AdaptStorage():
         self.step = 0
         self.device = device
 
-    def store_obs(self, obs):
+    def store_obs(self, obs, z):
         if self.step >= self.num_steps:
             raise AssertionError("Rollout buffer overflow")
         self.obs[self.step].copy_(torch.from_numpy(obs).to(self.device))
-        self.values[self.step].copy_(torch.from_numpy(obs)[:,-1].to(self.device))
+        # self.values[self.step].copy_(torch.from_numpy(obs)[:,-1].to(self.device))
+        self.values[self.step].copy_(z)
         self.step += 1
 
     def clear(self):

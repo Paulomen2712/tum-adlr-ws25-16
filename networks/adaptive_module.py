@@ -9,7 +9,7 @@ from torch.distributions import MultivariateNormal
 class AdaptiveActorCritic(AdaptivePolicy):
     """ Actor Critic Model."""
 
-    def __init__(self, obs_dim, action_dim, latent_size=1, encoder_hidden_dims=[64, 32], lr=1e-5, std = 0.5, history_len=30):
+    def __init__(self, obs_dim, action_dim, latent_size=1, encoder_hidden_dims=[64, 32], lr=1e-5, std = 0.5, history_len=10):
         """
             Initialize parameters and build model.
         """

@@ -336,6 +336,8 @@ class PPO:
                 "learning_rate": lr,
                 "iteration_compute": delta_t
             })
+        
+        delta_t = str(round(delta_t, 2))
 
         avg_ep_rews = str(round(avg_ep_rews, 2))
         avg_actor_loss = str(round(avg_actor_loss, 5))

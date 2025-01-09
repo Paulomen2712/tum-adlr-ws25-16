@@ -62,7 +62,7 @@ class ActorCritic(nn.Module):
         dist = MultivariateNormal(mean, self.cov_mat)
         log_probs = dist.log_prob(acts)
 
-        return values.squeeze(), log_probs
+        return values.squeeze(), log_probs, dist.entropy(), None, None
     
     def store_savestate(self, checkpoint_path):
         """

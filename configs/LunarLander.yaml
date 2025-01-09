@@ -4,7 +4,7 @@ num_envs: 5                              # Number of independent environments to
 num_steps: 1200                            # Number of timesteps per environment
 
 #Adapt Module
-adp_train_it: 200                        # Total iterations to train the base policy
+adp_train_it: 1                        # Total iterations to train the base policy
 adp_num_steps: 1200                        # Number of timesteps per environment
 
 #GAE
