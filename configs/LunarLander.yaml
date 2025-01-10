@@ -35,4 +35,4 @@ max_wind_power: 20
 # Misc parameters
 save_freq: 50                             # How often to save in number of iterations
 seed: ~ 
-device: 'cuda'
+device: 'cpu'
