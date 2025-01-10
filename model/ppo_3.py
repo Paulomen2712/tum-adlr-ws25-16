@@ -334,7 +334,7 @@ class PPO:
         if self.logger['val_rew'] is None:
             self.logger['val_rew'] = ep_ret
             
-        return (np.mean(ep_ret), np.mean(t)) if interupt else (ep_ret, t)
+        return ep_ret, t
 
     def validate_encoders(self):
         env = self.env_class(num_envs=1)

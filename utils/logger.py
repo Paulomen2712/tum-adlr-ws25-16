@@ -1,6 +1,11 @@
 import os
 from dataclasses import asdict
 import wandb
+import numpy as np
+import matplotlib.pyplot as plt
+import torch
+import wandb
+import io
 
 class SummaryWritter():
     def log(self, cur_iteration):
@@ -40,8 +45,25 @@ class WandbSummaryWritter():
     def stop(self):
         wandb.finish()
 
-    def save_model(self, model_path):
-        wandb.save(model_path, base_path=os.path.dirname(model_path))
+    def save_model(self, model, model_name):
+        torch.save(model.state_dict(), f"{wandb.run.dir}/{model_name}.pth")
+        artifact = wandb.Artifact(model_name, type="model")
+        artifact.add_file(f"{wandb.run.dir}/{model_name}.pth", f"{model_name}.pth")
+        wandb.log_artifact(artifact)
+
+    def save_histogram(self, data, data_name = 'Data', num_bins = 10):
+        median_value = np.median(data)
+        fig, ax = plt.subplots(figsize=(8, 6))
+        ax.hist(data, bins=num_bins, edgecolor='black', alpha=0.7, label=data_name)
+
+        ax.axvline(median_value, color='red', linestyle='dashed', linewidth=2, label=f'Median = {median_value}')
+
+        ax.set_xlabel('Value Range')
+        ax.set_ylabel('Frequency')
+        ax.legend()
+        wandb.log({data_name: wandb.Image(fig)})
+
+        plt.close(fig)
 
     def save_file(self, path, iter=None):
         wandb.save(path, base_path=os.path.dirname(path))
