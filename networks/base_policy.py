@@ -127,7 +127,7 @@ class ActorCriticWithEncoder(AdaptivePolicy):
         if(apply_masking):
             obs_clone = obs_clone * torch.cat([torch.ones_like(obs_clone[..., :-1]), torch.zeros_like(obs_clone[..., -1:])], dim=-1)
 
-        z = self.encoder(obs)
+        z = self.encoder(obs_clone)
 
         return torch.cat([obs_clone, z], dim=-1)
 
