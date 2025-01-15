@@ -336,29 +336,21 @@ class PPO:
             
         return ep_ret, t
 
-    def validate_encoders(self):
+    def validate_encoders(self, num_iters = 20):
         env = self.env_class(num_envs=1)
-        
-        random_obs = env.observation_space.sample()
-        random_obs[0, -1] = np.random.uniform(-3, 3)
-
 
         self.adapt_policy.clear_history()
         
-        wind_vals = []
+        true_wind_vals = []
         base_z = []
         adpt_z = []
     
-        for i in range(20):
-            # Modify only the wind dimension (9th dimension)
-            wind_value = np.random.uniform(-3, 3)
-            wind_vals.append(wind_value)
-
-            modified_obs = random_obs.copy()
-            modified_obs[0, -1] = wind_value  # Update wind dimension
+        for _ in range(num_iters):
+            random_obs = env.observation_space.sample()
+            true_wind_vals.append(random_obs[0, -1])
             
             # Convert to tensor and send through encoders
-            obs_tensor = torch.tensor(modified_obs, dtype=torch.float32).to(self.device)
+            obs_tensor = torch.tensor(random_obs, dtype=torch.float32).to(self.device)
             base_output = self.policy.encoder(obs_tensor).cpu().detach().numpy().flatten()[0]
             adpt_output = self.adapt_policy.encode(obs_tensor).cpu().detach().numpy().squeeze()[-1]
             
@@ -367,7 +359,7 @@ class PPO:
             # Log the outputs
         
 
-        return wind_vals, base_z, adpt_z
+        return true_wind_vals, base_z, adpt_z
 
     def test(self, use_adaptive=True):
         if use_adaptive:

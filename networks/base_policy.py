@@ -122,12 +122,12 @@ class ActorCriticWithEncoder(AdaptivePolicy):
         self.actor_optim = optim.Adam([*self.actor.parameters(), *self.encoder.parameters()], lr=actor_lr)
         self.critic_optim = optim.Adam(self.critic.parameters(), lr=critic_lr)
 
-    def encode(self, obs, apply_masking = False):
+    def encode(self, obs, apply_masking = True):
         obs_clone = obs.clone()
         if(apply_masking):
             obs_clone = obs_clone * torch.cat([torch.ones_like(obs_clone[..., :-1]), torch.zeros_like(obs_clone[..., -1:])], dim=-1)
 
-        z = self.encoder(obs_clone)
+        z = self.encoder(obs)
 
         return torch.cat([obs_clone, z], dim=-1)
 
