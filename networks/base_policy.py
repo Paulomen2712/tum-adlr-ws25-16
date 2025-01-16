@@ -174,9 +174,7 @@ class ActorCriticWithEncoder(AdaptivePolicy):
             'actor_state_dict': self.actor.state_dict(),
             'critic_state_dict': self.critic.state_dict(),
             'actor_optimizer_state_dict': self.actor_optim.state_dict(),
-            'critic_optimizer_state_dict': self.critic_optim.state_dict(),
-            'actor_scheduler_state_dict': self.actor_scheduler.state_dict(),
-            'critic_scheduler_state_dict': self.critic_scheduler.state_dict()
+            'critic_optimizer_state_dict': self.critic_optim.state_dict()
         }
         torch.save(checkpoint, checkpoint_path)
         print(f"Checkpoint saved at {checkpoint_path}")
@@ -188,6 +186,4 @@ class ActorCriticWithEncoder(AdaptivePolicy):
         self.critic.load_state_dict(checkpoint['critic_state_dict'])
         self.actor_optim.load_state_dict(checkpoint['actor_optimizer_state_dict'])
         self.critic_optim.load_state_dict(checkpoint['critic_optimizer_state_dict'])
-        self.actor_scheduler.load_state_dict(checkpoint['actor_scheduler_state_dict'])
-        self.critic_scheduler.load_state_dict(checkpoint['critic_scheduler_state_dict'])
         print(f"Checkpoint restored from {checkpoint_path}")

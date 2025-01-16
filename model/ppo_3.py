@@ -26,6 +26,8 @@ class PPO:
         # Initialize hyperparameters for training with PPO
         self.summary_writter = summary_writter
         self._init_hyperparameters(hyperparameters)
+        self.env = env(num_envs=self.num_envs)
+        self.critic_lr = self.actor_lr
         self.storage = Storage(self.num_steps, self.num_envs, self.obs_dim, self.act_dim, self.gamma, self.lam, self.device)
         self.adp_storage = AdaptStorage(self.adp_num_steps, self.num_envs, self.obs_dim, self.device )
 
@@ -116,8 +118,8 @@ class PPO:
                     batch_returns = returns[idx]
                     batch_values, pred_batch_log_probs, pred_batch_entropies, true_z, encoded_z = self.policy.evaluate(batch_obs, batch_acts)
                     
-                    actor_loss, kl = self.update_actor(pred_batch_log_probs, batch_log_probs, batch_advantages, pred_batch_entropies)
-                    # actor_loss, kl = self.update_actor_v2(pred_batch_log_probs, batch_log_probs, batch_advantages, pred_batch_entropies, true_z, encoded_z)
+                    # actor_loss, kl = self.update_actor(pred_batch_log_probs, batch_log_probs, batch_advantages, pred_batch_entropies)
+                    actor_loss, kl = self.update_actor_v2(pred_batch_log_probs, batch_log_probs, batch_advantages, pred_batch_entropies, true_z, encoded_z)
                     critic_loss = self.update_critic(batch_values, batch_returns)
 
                     act_loss.append(actor_loss.detach().item())
@@ -250,7 +252,8 @@ class PPO:
         return actor_loss.detach(), kl
 
     def update_actor_v2(self, pred_log_probs, log_probs, advantages, entropies, true_z, encoded_z):
-        encoder_loss =nn.MSELoss()(true_z.squeeze(), encoded_z.squeeze())
+        encoder_loss = nn.MSELoss()(true_z.squeeze(), encoded_z.squeeze())
+        encoder_loss /= 100
 
         log_ratios = pred_log_probs - log_probs
         ratios = torch.exp(log_ratios)
@@ -336,30 +339,56 @@ class PPO:
             
         return ep_ret, t
 
-    def validate_encoders(self, num_iters = 20):
-        env = self.env_class(num_envs=1)
 
+    # def validate_encoders(self):
+    #     env = self.env_class(num_envs=1)
+        
+    #     random_obs = env.observation_space.sample()
+
+    #     self.adapt_policy.clear_history()
+
+    #     wind_vals = []
+    #     base_z = []
+    #     adpt_z = []
+
+    #     for i in range(20):
+    #         # Modify only the wind dimension (9th dimension)
+    #         wind_value = np.random.uniform(5, 20)
+    #         wind_vals.append(wind_value)
+    #         modified_obs = random_obs.copy()
+    #         modified_obs[0, -1] = wind_value  # Update wind dimension
+
+    #         obs_tensor = torch.tensor(modified_obs, dtype=torch.float32).to(self.device)
+    #         base_output = self.policy.encoder(obs_tensor).cpu().detach().numpy().flatten()[0]
+    #         adpt_output = self.adapt_policy.encode(obs_tensor).cpu().detach().numpy().squeeze()[-1]
+
+    #         base_z.append(base_output)
+    #         adpt_z.append(adpt_output)
+
+    #         return wind_vals, base_z, adpt_z
+
+    def validate_encoders(self, num_envs = 100, num_steps = 20):
         self.adapt_policy.clear_history()
-        
-        true_wind_vals = []
-        base_z = []
-        adpt_z = []
-    
-        for _ in range(num_iters):
-            random_obs = env.observation_space.sample()
-            true_wind_vals.append(random_obs[0, -1])
-            
-            # Convert to tensor and send through encoders
-            obs_tensor = torch.tensor(random_obs, dtype=torch.float32).to(self.device)
-            base_output = self.policy.encoder(obs_tensor).cpu().detach().numpy().flatten()[0]
-            adpt_output = self.adapt_policy.encode(obs_tensor).cpu().detach().numpy().squeeze()[-1]
-            
-            base_z.append(base_output)
-            adpt_z.append(adpt_output)
-            # Log the outputs
-        
+        adpt_policy = self.adapt_policy
 
-        return true_wind_vals, base_z, adpt_z
+        env = self.env_class(num_envs=num_envs)
+        
+        obs, done  = env.reset()
+
+        for _ in range(num_steps):
+            adpt_policy_action = adpt_policy.sample_action(torch.Tensor(obs).to(self.device))
+
+            obs, _, _ = env.step(adpt_policy_action.cpu().numpy())
+
+        
+        true_winds = obs[:, -1]
+        
+        obs_tensor = torch.tensor(obs, dtype=torch.float32).to(self.device)
+        base_output = self.policy.encoder(obs_tensor).cpu().detach().numpy().flatten()
+        adpt_output = self.adapt_policy.encode(obs_tensor).cpu().detach().numpy().squeeze()[:, -1]
+
+        return true_winds, base_output, adpt_output
+
 
     def test(self, use_adaptive=True):
         if use_adaptive:
