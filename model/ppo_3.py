@@ -340,32 +340,30 @@ class PPO:
         return ep_ret, t
 
 
-    # def validate_encoders(self):
-    #     env = self.env_class(num_envs=1)
-        
-    #     random_obs = env.observation_space.sample()
+    def validate_encoders_single_rollout(self):
+        self.adapt_policy.clear_history()
 
-    #     self.adapt_policy.clear_history()
+        true_wind_vals = []
+        base_z = []
+        adpt_z = []
 
-    #     wind_vals = []
-    #     base_z = []
-    #     adpt_z = []
+        env = self.env_class(num_envs=1)
+        obs, done = env.reset()
 
-    #     for i in range(20):
-    #         # Modify only the wind dimension (9th dimension)
-    #         wind_value = np.random.uniform(5, 20)
-    #         wind_vals.append(wind_value)
-    #         modified_obs = random_obs.copy()
-    #         modified_obs[0, -1] = wind_value  # Update wind dimension
+        while not done[0]:
+            true_wind_vals.append(obs[0, -1])
 
-    #         obs_tensor = torch.tensor(modified_obs, dtype=torch.float32).to(self.device)
-    #         base_output = self.policy.encoder(obs_tensor).cpu().detach().numpy().flatten()[0]
-    #         adpt_output = self.adapt_policy.encode(obs_tensor).cpu().detach().numpy().squeeze()[-1]
+            obs_tensor = torch.tensor(obs, dtype=torch.float32).to(self.device)
+            action = self.adapt_policy.sample_action(obs_tensor)
 
-    #         base_z.append(base_output)
-    #         adpt_z.append(adpt_output)
+            base_output = self.policy.encoder(obs_tensor).to(self.device).detach().numpy().flatten()[0]
+            adpt_output = self.adapt_policy.encode(obs_tensor).to(self.device).detach().numpy().squeeze()[-1]
 
-    #         return wind_vals, base_z, adpt_z
+            base_z.append(base_output)
+            adpt_z.append(adpt_output)
+            obs, _, done = env.step(action.numpy())
+            
+        return true_wind_vals, base_z, adpt_z
 
     def validate_encoders(self, num_envs = 100, num_steps = 20):
         self.adapt_policy.clear_history()
