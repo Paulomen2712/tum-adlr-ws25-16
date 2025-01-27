@@ -26,7 +26,7 @@ class Encoder(nn.Module):
 class MLP(nn.Module):
     """ Fully connected feedforward network with a hidden layer. """
 
-    def __init__(self, input_dim, output_dim, hidden_dims=[64], activation=nn.ReLU):
+    def __init__(self, input_dim, output_dim, hidden_dims=[64], activation=nn.Tanh, last_activation = None):
         """
             Initialize parameters and build model.
         """
@@ -38,7 +38,9 @@ class MLP(nn.Module):
         for i in range(len(layer_dims) - 1):
             layers.append(nn.Linear(layer_dims[i], layer_dims[i + 1]))
             if i < len(layer_dims) - 2:
-                layers.append(activation())   
+                layers.append(activation())
+        if last_activation != None:
+            layers.append(last_activation())
         self.model = nn.Sequential(*layers)
 
     def forward(self, x):

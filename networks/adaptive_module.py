@@ -9,12 +9,12 @@ from torch.distributions import MultivariateNormal
 class AdaptiveActorCritic(AdaptivePolicy):
     """ Actor Critic Model."""
 
-    def __init__(self, obs_dim, action_dim, latent_size=1, encoder_hidden_dims=[64, 32], lr=1e-5, std = 0.5, history_len=10):
+    def __init__(self, obs_dim, action_dim, latent_size=1, encoder_hidden_dims=[64, 32], lr=1e-5, history_len=10):
         """
             Initialize parameters and build model.
         """
         
-        super(AdaptiveActorCritic, self).__init__(obs_dim, action_dim, latent_size, encoder_hidden_dims, std)
+        super(AdaptiveActorCritic, self).__init__(obs_dim, action_dim, latent_size, encoder_hidden_dims)
 
         self.history_len = history_len
         self.obs_history = deque(maxlen=history_len)
@@ -25,6 +25,7 @@ class AdaptiveActorCritic(AdaptivePolicy):
 
         self.optim = optim.Adam(self.encoder.parameters(), lr=lr)
         self.actor = None
+        self.actor_logstd = None
 
     def clear_history(self):
         self.obs_history.clear()
@@ -34,6 +35,8 @@ class AdaptiveActorCritic(AdaptivePolicy):
         self.actor = copy.deepcopy(policy.actor)
         for param in self.actor.parameters():
             param.requires_grad = False
+        self.actor_logstd = copy.deepcopy(policy.actor_logstd)
+        self.actor_logstd.requires_grad = False
 
     def encode(self, obs):
         # Ensure the observation has the same shape as the last one in the history, or pad/trim as necessary
@@ -100,7 +103,8 @@ class AdaptiveActorCritic(AdaptivePolicy):
     def sample_action(self, obs):
         ext_obs = self.encode(obs)
         mean = self.actor(ext_obs)
-        dist = MultivariateNormal(mean, self.cov_mat)
+        action_std = torch.exp(self.actor_logstd)
+        dist = torch.distributions.Normal(mean, action_std)
         action = dist.sample()
 
         self.action_history.append(action.clone())
@@ -121,7 +125,8 @@ class AdaptiveActorCritic(AdaptivePolicy):
     #     """
     #     ext_obs = self.encode(obs)
     #     mean = self.actor(ext_obs)
-    #     dist = MultivariateNormal(mean, self.cov_mat)
+    #     action_std = torch.exp(self.actor_logstd)
+    #     dist = torch.distributions.Normal(mean, action_std)
     #     action = dist.sample()
     #     print(action)
 
@@ -141,7 +146,8 @@ class AdaptiveActorCritic(AdaptivePolicy):
     #         encoded_obs = self.encode(current_obs)  # Shape: [1, new_obs_dim]
 
     #         mean = self.actor(encoded_obs)
-    #         dist = MultivariateNormal(mean, self.cov_mat)
+    #         action_std = torch.exp(self.actor_logstd)
+    #         dist = torch.distributions.Normal(mean, action_std)
     #         action = dist.sample()
 
             

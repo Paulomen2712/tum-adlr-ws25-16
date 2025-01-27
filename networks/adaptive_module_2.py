@@ -63,7 +63,8 @@ class AdaptiveActorCritic(nn.Module):
     def sample_action(self, obs):
         ext_obs = self.encode(obs)
         mean = self.actor(ext_obs)
-        dist = MultivariateNormal(mean, self.cov_mat)
+        action_std = torch.exp(self.actor_logstd)
+        dist = torch.distributions.Normal(mean, action_std)
         action = dist.sample()
 
         self.action_history.append(action.clone())
@@ -76,8 +77,9 @@ class AdaptiveActorCritic(nn.Module):
             Samples an action from the actor/critic network.
         """
         ext_obs = self.encode(obs)
-        mean, values = self.actor(ext_obs)
-        dist = MultivariateNormal(mean, self.cov_mat)
+        mean = self.actor(ext_obs)
+        action_std = torch.exp(self.actor_logstd)
+        dist = torch.distributions.Normal(mean, action_std)
         action = dist.sample()
         log_prob = dist.log_prob(action)
 
@@ -92,7 +94,8 @@ class AdaptiveActorCritic(nn.Module):
         """
         ext_obs = self.encode(obs)
         mean, values = self.actor(ext_obs), self.critic(ext_obs.detach())
-        dist = MultivariateNormal(mean, self.cov_mat)
+        action_std = torch.exp(self.actor_logstd)
+        dist = torch.distributions.Normal(mean, action_std)
         log_probs = dist.log_prob(acts)
 
         return values.squeeze()

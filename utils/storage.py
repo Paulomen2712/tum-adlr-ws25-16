@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 class Storage():
-    def __init__(self, num_steps, num_envs, obs_dim, act_dim, gamma, lam, device='cuda'):
+    def __init__(self, num_steps, num_envs, obs_dim, act_dim, gamma, lam, normalize_advantages=True, device='cuda'):
         self.device = torch.device(device)
         self.obs = torch.zeros((num_steps, num_envs, obs_dim), device=self.device)
         self.actions = torch.zeros((num_steps, num_envs, act_dim), device=self.device)
@@ -18,6 +18,7 @@ class Storage():
 
         self.gamma = gamma
         self.lam = lam
+        self.normalize_advantages = normalize_advantages
 
         self.num_steps = num_steps
         self.step = 0
@@ -26,27 +27,41 @@ class Storage():
     def store_batch(self, obs, actions, logprobs, rewards, values, dones):
         if self.step >= self.num_steps:
             raise AssertionError("Rollout buffer overflow")
-        self.obs[self.step].copy_(torch.from_numpy(obs).to(self.device))
+        self.obs[self.step].copy_(torch.from_numpy(obs).to(self.device, torch.float32))
         self.actions[self.step].copy_(actions)
-        self.rewards[self.step].copy_(torch.from_numpy(rewards).to(self.device))
-        self.dones[self.step].copy_(torch.from_numpy(dones).to(self.device))
+        self.rewards[self.step].copy_(torch.from_numpy(rewards).to(self.device, torch.float32))
+        self.dones[self.step].copy_(torch.from_numpy(dones).to(self.device, torch.float32))
         self.values[self.step].copy_(values)
         self.logprobs[self.step].copy_(logprobs.to(self.device))
         self.step += 1
 
-    def compute_advantages(self, next_value, next_done):
+    def compute_advantages(self, next_value):
         next_value = next_value.reshape(1, -1)
-        next_done = torch.Tensor(next_done).to(self.device)
         last_lam = 0
+        advantages = torch.zeros_like(self.rewards).to(self.device)
         for t in reversed(range(self.num_steps)):
             if t == self.num_steps - 1:
-                next_non_terminal = 1.0 - next_done
                 next_values = next_value
             else:
-                next_non_terminal = 1.0 - self.dones[t + 1]
                 next_values = self.values[t + 1]
+            next_non_terminal = 1.0 - self.dones[t]
             delta = self.rewards[t] + self.gamma * next_values * next_non_terminal - self.values[t]
-            self.advantages[t] = last_lam = delta + self.gamma * self.lam * next_non_terminal * last_lam
+            advantages[t] = last_lam = delta + self.gamma * self.lam * next_non_terminal * last_lam
+            self.returns[t,:] = advantages[t] + self.values[t]
+        self.advantages = self.returns - self.values
+    
+    def compute_advantages2(self, next_value, next_done):
+        next_done = torch.Tensor(next_done).to(self.device)
+        self.returns = torch.zeros_like(self.rewards).to(self.device)
+        for t in reversed(range(self.num_steps)):
+            if t == self.num_steps - 1:
+                nextnonterminal = 1.0 - next_done
+                next_return = next_value
+            else:
+                nextnonterminal = 1.0 - self.dones[t + 1]
+                next_return = self.returns[t + 1]
+            self.returns[t] = self.rewards[t] + self.gamma * nextnonterminal * next_return
+        self.advantages = self.returns - self.values
 
     def clear(self):
         self.step = 0
@@ -66,14 +81,12 @@ class Storage():
         obs = self.obs.transpose(0,1).reshape((-1,self.obs_dim))
         logprobs = self.logprobs.transpose(0,1).flatten()
         actions = self.actions.transpose(0,1).reshape((-1, self.act_dim))
-        returns = (self.advantages + self.values).transpose(0,1).flatten()
+        returns = self.returns.transpose(0,1).flatten()
         advantages = self.advantages.transpose(0,1).flatten()
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-10)
+        if self.normalize_advantages:
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-10)
         return  obs, actions, logprobs, advantages, returns
      
-    def store_values( self, values):
-        self.values[self.step].copy_(values)
-        step+=1
     def get_values(self):
         return self.values.transpose(0,1).flatten()
     
