@@ -14,7 +14,7 @@ from utils.storage import Storage, AdaptStorage
 class PPO:
     """PPO Algorithm Implementation."""
 
-    def __init__(self, summary_writter=None, env = LunarContinuous, policy_class = ActorCriticWithEncoder, **hyperparameters):
+    def __init__(self, summary_writter=None, env = LunarContinuous, policy_class = ActorCriticWithEncoder, activation=nn.ReLU, **hyperparameters):
         """
 			Initializes the PPO model, including hyperparameters.
 		"""
@@ -32,10 +32,10 @@ class PPO:
         self.adp_storage = AdaptStorage(self.adp_num_steps, self.num_adp_envs, self.obs_dim, self.device )
 
         # Initialize actor and critic
-        self.policy = policy_class(self.obs_dim, self.act_dim, lr=self.lr, hidden_dims=self.hidden_dims, encoder_hidden_dims=self.encoder_hidden_dims)
+        self.policy = policy_class(self.obs_dim, self.act_dim, lr=self.lr, hidden_dims=self.hidden_dims, encoder_hidden_dims=self.encoder_hidden_dims, activation=activation)
         self.actor = self.policy.actor                                              
         self.critic = self.policy.critic
-        self.adapt_policy = AdaptiveActorCritic(self.obs_dim, self.act_dim, lr=self.adp_lr, encoder_hidden_dims=self.adp_encoder_hidden_dims, history_len=self.history_len)
+        self.adapt_policy = AdaptiveActorCritic(self.obs_dim, self.act_dim, lr=self.adp_lr, encoder_hidden_dims=self.adp_encoder_hidden_dims, history_len=self.history_len, activation=activation)
         self.adpt_module = self.adapt_policy.encoder
         
 

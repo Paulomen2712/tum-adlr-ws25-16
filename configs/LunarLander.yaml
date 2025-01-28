@@ -1,12 +1,12 @@
 #Base Policy
 total_base_train_steps: 3_000_000
-num_envs: 20                             # Number of independent environments to train on 40
-num_steps: 900                            # Number of timesteps per environment 800
+num_envs: 40                             # Number of independent environments to train on 40
+num_steps: 600                            # Number of timesteps per environment 800
 
 #Adapt Module
-adp_train_it: 30                      # Total iterations to train the base policy
-num_adp_envs: 50
-adp_num_steps: 400                        # Number of timesteps per environment
+adp_train_it: 70                      # Total iterations to train the base policy
+num_adp_envs: 10
+adp_num_steps: 500                        # Number of timesteps per environment
 
 #GAE
 gamma: 0.99                               # Discount factor for the rewards 
@@ -16,12 +16,12 @@ normalize_advantages: False
 #Network
 hidden_dims: [128, 64, 32]
 encoder_hidden_dims: [16, 4]
-adp_encoder_hidden_dims: [256, 128, 64]
+adp_encoder_hidden_dims: [256, 64, 16]
 history_len: 20
 
 # Backprop
 n_updates_per_iteration: 10                # Number of times to update policy per iteration
-adp_lr: 0.0075
+adp_lr: 0.005
 lr: 0.001 
 clip: 0.2                                 # Clip ratio for ppo loss. Using recomended 0.2
 clip_grad: False
@@ -36,7 +36,7 @@ anneal_discount: 150
 val_freq: 2000
 val_iter: 5
 
-min_wind_power: 5
+min_wind_power: 0.1
 max_wind_power: 20
 
 # Misc parameters

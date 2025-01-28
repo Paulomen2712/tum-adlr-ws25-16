@@ -1,5 +1,5 @@
 #Base Policy
-total_base_train_steps: 15_000_000
+total_base_train_steps: 5_000_000
 num_envs: 100                              # Number of independent environments to train on
 num_steps: 400                            # Number of timesteps per environment
 
@@ -10,7 +10,7 @@ adp_num_steps: 1200                        # Number of timesteps per environment
 #GAE
 gamma: 0.99                               # Discount factor for the rewards 
 lam: 0.95                                 # Lambda Parameter for GAE 
-normalize_advantages: True
+normalize_advantages: False
 
 #Network
 hidden_dims: [128, 64, 32]
@@ -20,7 +20,7 @@ adp_encoder_hidden_dims: [256, 128, 64]
 # Backprop
 n_updates_per_iteration: 10                # Number of times to update policy per iteration
 adp_lr: 0.005
-lr: 0.001 
+lr: 0.003 
 clip: 0.2                                 # Clip ratio for ppo loss. Using recomended 0.2
 clip_grad: True
 max_grad_norm: 0.5                       # Gradient clipping threshold
@@ -34,8 +34,6 @@ anneal_discount: 500
 val_freq: 2000
 val_iter: 5
 
-min_wind_power: 5
-max_wind_power: 20
 
 # Misc parameters
 save_freq: 50                             # How often to save in number of iterations

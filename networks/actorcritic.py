@@ -6,17 +6,17 @@ from networks.mlp import MLP
 class ActorCritic(nn.Module):
     """ Actor Critic Model."""
 
-    def __init__(self, obs_dim, action_dim, hidden_dims=[128,64], lr=1e-5, gamma=0.99, std=0.):
+    def __init__(self, obs_dim, action_dim, hidden_dims=[128,64], lr=1e-5, gamma=0.99, std=0., activation=nn.ELU):
         """
             Initialize parameters and build model.
         """
         super(ActorCritic, self).__init__()
         
         # Actor network (outputs probabilities for possible actions)
-        self.actor = MLP(obs_dim, action_dim, hidden_dims, last_activation = nn.Tanh)
+        self.actor = MLP(obs_dim, action_dim, hidden_dims,activation, last_activation = nn.Tanh)
         
         # Critic network (outputs value estimate)
-        self.critic = MLP(obs_dim, 1, hidden_dims)
+        self.critic = MLP(obs_dim, 1, hidden_dims, activation)
 
         self.actor_logstd = nn.Parameter(torch.full(size=(action_dim,), fill_value=std))
 

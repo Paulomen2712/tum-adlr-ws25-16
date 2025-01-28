@@ -26,7 +26,7 @@ class Encoder(nn.Module):
 class MLP(nn.Module):
     """ Fully connected feedforward network with a hidden layer. """
 
-    def __init__(self, input_dim, output_dim, hidden_dims=[64], activation=nn.Tanh, last_activation = None):
+    def __init__(self, input_dim, output_dim, hidden_dims=[64], activation=nn.ELU, last_activation = None):
         """
             Initialize parameters and build model.
         """

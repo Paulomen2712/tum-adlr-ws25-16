@@ -9,19 +9,19 @@ from networks.policy import AdaptivePolicy
 class ActorCriticWithEncoder(AdaptivePolicy):
     """ Actor Critic Model."""
 
-    def __init__(self, obs_dim, action_dim, latent_size=1, hidden_dims=[64], encoder_hidden_dims=[64, 32], lr=1e-5):
+    def __init__(self, obs_dim, action_dim, latent_size=1, hidden_dims=[64], encoder_hidden_dims=[64, 32], lr=1e-5, activation=nn.ELU):
         """
             Initialize parameters and build model.
         """
         
-        super(ActorCriticWithEncoder, self).__init__(obs_dim, action_dim, latent_size, encoder_hidden_dims, activation=nn.Identity)
+        super(ActorCriticWithEncoder, self).__init__(obs_dim, action_dim, latent_size, encoder_hidden_dims, activation=activation, last_activation=nn.Tanh)
 
         # Actor network (outputs probabilities for possible actions)
-        self.actor = MLP(obs_dim+latent_size, action_dim, hidden_dims, last_activation = nn.Tanh)
+        self.actor = MLP(obs_dim+latent_size, action_dim, hidden_dims,activation, last_activation = nn.Tanh)
         self.actor_logstd = nn.Parameter(torch.full(size=(action_dim,), fill_value=0.))
         
         # Critic network (outputs value estimate)
-        self.critic = MLP(obs_dim+latent_size, 1, hidden_dims)
+        self.critic = MLP(obs_dim+latent_size, 1, hidden_dims, activation)
 
 
         self.actor_optim = optim.Adam([*self.actor.parameters(), *self.encoder.parameters(), self.actor_logstd], lr=lr)

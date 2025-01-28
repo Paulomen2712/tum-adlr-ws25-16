@@ -12,7 +12,7 @@ from utils.storage import Storage
 class PPO:
     """PPO Algorithm Implementation."""
 
-    def __init__(self, summary_writter=None, env = LunarContinuous, policy_class = ActorCritic, **hyperparameters):
+    def __init__(self, summary_writter=None, env = LunarContinuous, policy_class = ActorCritic, activation=nn.ReLU, **hyperparameters):
         """
 			Initializes the PPO model, including hyperparameters.
 		"""
@@ -27,7 +27,7 @@ class PPO:
         self.storage = Storage(self.num_steps, self.num_envs, self.obs_dim, self.act_dim, self.gamma, self.lam, self.normalize_advantages, self.device )
 
         # Initialize actor and critic
-        self.policy = policy_class(self.obs_dim, self.act_dim, lr=self.lr, gamma=self.lr_gamma, hidden_dims=self.hidden_dims)
+        self.policy = policy_class(self.obs_dim, self.act_dim, lr=self.lr, gamma=self.lr_gamma, hidden_dims=self.hidden_dims, activation=activation)
         self.actor = self.policy.actor                                              
         self.critic = self.policy.critic
 
