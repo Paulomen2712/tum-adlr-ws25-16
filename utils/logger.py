@@ -65,5 +65,5 @@ class WandbSummaryWritter():
 
         plt.close(fig)
 
-    def save_file(self, path, iter=None):
+    def save_file(self, path):
         wandb.save(path, base_path=os.path.dirname(path))

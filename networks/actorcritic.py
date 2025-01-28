@@ -6,22 +6,21 @@ from networks.mlp import MLP
 class ActorCritic(nn.Module):
     """ Actor Critic Model."""
 
-    def __init__(self, obs_dim, action_dim, hidden_dims=[64], lr=1e-5, gamma=0.99, std=0.5):
+    def __init__(self, obs_dim, action_dim, hidden_dims=[128,64], lr=1e-5, gamma=0.99, std=0.):
         """
             Initialize parameters and build model.
         """
         super(ActorCritic, self).__init__()
         
         # Actor network (outputs probabilities for possible actions)
-        self.actor = MLP(obs_dim, action_dim, hidden_dims)
+        self.actor = MLP(obs_dim, action_dim, hidden_dims, last_activation = nn.Tanh)
         
         # Critic network (outputs value estimate)
         self.critic = MLP(obs_dim, 1, hidden_dims)
 
-        self.register_buffer('cov_var', torch.full(size=(action_dim,), fill_value=std))
-        self.register_buffer('cov_mat', torch.diag(self.cov_var))
+        self.actor_logstd = nn.Parameter(torch.full(size=(action_dim,), fill_value=std))
 
-        self.actor_optim = optim.Adam(self.actor.parameters(), lr=lr)
+        self.actor_optim = optim.Adam(list(self.actor.parameters()) + [self.actor_logstd], lr=lr)
         self.critic_optim = optim.Adam(self.critic.parameters(), lr=lr)
 
         # self.actor_scheduler= optim.lr_scheduler.StepLR(self.actor_optim, step_size = 1, gamma=gamma)
@@ -34,7 +33,8 @@ class ActorCritic(nn.Module):
     @torch.no_grad()
     def sample_action(self, obs):
         mean = self.actor(obs)
-        dist = MultivariateNormal(mean, self.cov_mat)
+        action_std = torch.exp(self.actor_logstd)
+        dist = torch.distributions.Normal(mean, action_std)
         return dist.sample()
 
     @torch.no_grad()
@@ -43,9 +43,10 @@ class ActorCritic(nn.Module):
             Samples an action from the actor/critic network.
         """
         mean, values = self.actor(obs), self.critic(obs)
-        dist = MultivariateNormal(mean, self.cov_mat)
+        action_std = torch.exp(self.actor_logstd)
+        dist = torch.distributions.Normal(mean, action_std)
         action = dist.sample()
-        log_prob = dist.log_prob(action)
+        log_prob = dist.log_prob(action).sum(1)
 
         return action, log_prob, values.view(-1)
     
@@ -59,22 +60,8 @@ class ActorCritic(nn.Module):
             each action given the batch observations and actions. 
         """
         mean, values = self.actor(obs), self.critic(obs)
-        dist = MultivariateNormal(mean, self.cov_mat)
-        log_probs = dist.log_prob(acts)
+        action_std = torch.exp(self.actor_logstd)
+        dist = torch.distributions.Normal(mean, action_std)
+        log_probs = dist.log_prob(acts).sum(1)
 
-        return values.squeeze(), log_probs, dist.entropy(), None, None
-    
-    def store_savestate(self, checkpoint_path):
-        """
-            Stores the model into the given directory.
-        """
-        checkpoint = {
-            'actor_state_dict': self.actor.state_dict(),
-            'critic_state_dict': self.critic.state_dict(),
-            'actor_optimizer_state_dict': self.actor_optim.state_dict(),
-            'critic_optimizer_state_dict': self.critic_optim.state_dict(),
-            'actor_scheduler_state_dict': self.actor_scheduler.state_dict(),
-            'critic_scheduler_state_dict': self.critic_scheduler.state_dict()
-        }
-        torch.save(checkpoint, checkpoint_path)
-        print(f"Checkpoint saved at {checkpoint_path}")
+        return values.flatten(), log_probs, dist.entropy()

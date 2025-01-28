@@ -24,24 +24,19 @@ class PPO:
         # Initialize hyperparameters for training with PPO
         self.summary_writter = summary_writter
         self._init_hyperparameters(hyperparameters)
-        self.device = 'cuda'
-        self.storage = Storage(self.num_steps, self.num_envs, self.obs_dim, self.act_dim, self.gamma, self.lam, self.device )
+        self.storage = Storage(self.num_steps, self.num_envs, self.obs_dim, self.act_dim, self.gamma, self.lam, self.normalize_advantages, self.device )
 
         # Initialize actor and critic
-        self.policy = policy_class(self.obs_dim, self.act_dim, lr=self.lr, gamma=self.lr_gamma)
+        self.policy = policy_class(self.obs_dim, self.act_dim, lr=self.lr, gamma=self.lr_gamma, hidden_dims=self.hidden_dims)
         self.actor = self.policy.actor                                              
         self.critic = self.policy.critic
-        self.base_encoder = None
-        self.adapt_encoder = None
-        
 
         # Initialize optimizers for actor and critic
         self.actor_optim = self.policy.actor_optim  
         self.critic_optim = self.policy.critic_optim
-        self.adapt_optim=None
 
         self.actor_scheduler = self.policy.actor_scheduler
-        self.critic_scheduler = self.policy.actor_optim
+        self.critic_scheduler = self.policy.critic_scheduler
         
         self.policy.to(self.device)
 
@@ -64,7 +59,6 @@ class PPO:
         """
         self.policy.train()
         self.logger['delta_t'] = time.time_ns()
-        init_lr = self.lr
 
         for it in range(0, self.base_train_it): 
             if self.anneal_lr:
@@ -74,7 +68,7 @@ class PPO:
                 new_lr = max(new_lr, 0.0)
                 self.actor_optim.param_groups[0]["lr"] = new_lr
                 self.critic_optim.param_groups[0]["lr"] = new_lr
-                # Log learning rate
+                
                 self.lr = new_lr
                 self.logger['lr'] = self.lr
 
@@ -108,7 +102,7 @@ class PPO:
                     batch_log_probs = log_probs[idx]
                     batch_advantages = advantages[idx]
                     batch_returns = returns[idx]
-                    batch_values, pred_batch_log_probs = self.policy.evaluate(batch_obs, batch_acts)
+                    batch_values, pred_batch_log_probs, _ = self.policy.evaluate(batch_obs, batch_acts)
                     
                     actor_loss, kl = self.update_actor(pred_batch_log_probs, batch_log_probs, batch_advantages)
                     self.update_critic(batch_values, batch_returns)
@@ -131,57 +125,11 @@ class PPO:
 
             self._log_summary()
 
-			# Save model every couple iterations
             if self.save_freq > 0 and (it+1) % self.save_freq == 0:
                 save_path = self._get_save_path(it+1)
                 os.makedirs(os.path.dirname(save_path), exist_ok=True)
-                self.policy.store_savestate(save_path)
-        self.lr = init_lr
-        for ad_it in range(0, self.adp_train_it):
-            if self.anneal_lr:
-                frac = ad_it / (self.adp_train_it + self.anneal_discount) 
-                new_lr = self.lr * (1.0 - frac)
-
-                new_lr = max(new_lr, 0.0)
-                self.adapt_optim.param_groups[0]["lr"] = new_lr
-                # Log learning rate
-                self.lr = new_lr
-                self.logger['lr'] = self.lr
-
-            rollout_start = time.time_ns()  
-            values = self.adpt_rollout()
-            rollout_end = time.time_ns() 
-
-            self.logger['i_so_far'] = it + 1
-            self.logger['rollout_compute'] = (rollout_end - rollout_start) / 1e9
-
-
-            batch_size = values.size(0)
-            inds = np.arange(batch_size)
-            sgdbatch_size = batch_size // self.n_sgd_batches
-            loss = []
-            kls = []
-
-            grad_start = time.time_ns() 
-            for _ in range(self.n_updates_per_iteration): 
-
-                #SGD
-                np.random.shuffle(inds)
-                for start in range(0, batch_size, sgdbatch_size):
-                    end = start + sgdbatch_size
-                    idx = inds[start:end]
-                    
-                    #Restrict data to current batch
-                    batch_values = values[idx]
-                    pred_batch_values, _ = self.policy.evaluate(batch_obs, batch_acts)
-                    
-                    actor_loss, kl = self.update_actor(pred_batch_log_probs, batch_log_probs, batch_advantages)
-                    self.adpt(batch_values, pred_batch_values)
-
-
-            grad_end = time.time_ns()
-            self.logger['grad_compute'] = (grad_end - grad_start) / 1e9
-
+                torch.save(self.policy.state_dict(), save_path)
+                
     def rollout(self):
         """
             Collects batch of simulated data.
@@ -198,28 +146,13 @@ class PPO:
         next_obs, next_done = self.env.reset()
         for _ in range(self.num_steps):
             obs = next_obs.copy() 
-            dones = next_done.copy() 
 
-            actions, logprobs, values = self.policy.act(torch.from_numpy(next_obs).to(self.device))
+            actions, logprobs, values = self.policy.act(torch.from_numpy(next_obs).to(self.device, torch.float32))
             next_obs, rewards, next_done = self.env.step(actions.cpu().numpy())
 
-            self.storage.store_batch(obs, actions, logprobs, rewards, values, dones)
-        self.storage.compute_advantages(self.policy.get_value(torch.from_numpy(next_obs).to(self.device)), next_done)
+            self.storage.store_batch(obs, actions, logprobs, rewards, values, next_done)
+        self.storage.compute_advantages(self.policy.get_value(torch.from_numpy(next_obs).to(self.device, torch.float32)))
         return self.storage.get_rollot_data()
-
-    def adpt_rollout(self):
-        self.storage.clear()
-
-        next_obs, next_done = self.env.reset()
-        for _ in range(self.num_steps):
-            obs = next_obs.copy() 
-            dones = next_done.copy() 
-
-            actions, logprobs, values = self.policy.act(torch.from_numpy(next_obs).to(self.device))
-            next_obs, rewards, next_done = self.env.step(actions.cpu().numpy())
-
-            self.storage.store_batch(obs, actions, logprobs, rewards, values, dones)
-        return self.storage.g
 
     def update_actor(self, pred_log_probs, log_probs, advantages):
         log_ratios = pred_log_probs - log_probs
@@ -232,29 +165,24 @@ class PPO:
         
         self.actor_optim.zero_grad()
         actor_loss.backward()
-        nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
+        if self.clip_grad:
+            nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
+            nn.utils.clip_grad_norm_(self.policy.actor_logstd, self.max_grad_norm)
         self.actor_optim.step()
         return actor_loss.detach(), kl
 
     def update_critic(self,  values, returns):
-        critic_loss = nn.MSELoss()(values.squeeze(), returns.squeeze())
+        critic_loss = nn.MSELoss()(values, returns)
         
         self.critic_optim.zero_grad()
         critic_loss.backward()
-        nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
+        if self.clip_grad:
+            nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
         self.critic_optim.step()
-
-    def update_adpt(self,  pred_values, values):
-        adapt_loss = nn.MSELoss()(pred_values.squeeze(), values.squeeze())
-        
-        self.adapt_optim.zero_grad()
-        adapt_loss.backward()
-        nn.utils.clip_grad_norm_(self.adapt_encoder.parameters(), self.max_grad_norm)
-        self.adapt_optim.step()
 
     def restore_savestate(self, checkpoint):
         model = ActorCritic(self.obs_dim, self.act_dim)
-        model.restore_savestate(checkpoint)
+        model.load_state_dict(torch.load(checkpoint))
         self.policy = model
 
     def validate(self, val_iter, should_record=False):
@@ -263,7 +191,7 @@ class PPO:
         else:
             env = self.env_class(num_envs=val_iter)
         obs, done  = env.reset()
-
+        self.policy.to(self.device)
         t = np.array([0]*val_iter, dtype=float)
         ep_ret = np.array([0]*val_iter, dtype=float)
         t_sim = 0
@@ -274,9 +202,9 @@ class PPO:
             t += not_done
             action = self.policy.sample_action(torch.Tensor(obs).to(self.device))
             obs, rew, next_done = env.step(action.cpu().numpy())
-            done |= next_done
             ep_ret += rew * not_done
-            
+            done |= next_done
+        env.close()   
         return np.mean(ep_ret),  np.mean(t)
 
     def test(self):
@@ -284,10 +212,12 @@ class PPO:
         env = self.env_class(num_envs=1,render_mode='human')
         while True:
                 obs, done = env.reset()
-                print(obs, flush=True)
+                t = 1
                 while not done[0]:
                     action = self.policy.sample_action(torch.Tensor(obs))
                     obs, _, done = env.step(action.numpy())
+                    t+=1
+
 
     def _init_hyperparameters(self, hyperparameters):
         """
@@ -300,7 +230,7 @@ class PPO:
 
         for param, val in hyperparameters.items():
             exec('self.' + param + ' = ' + str(val))
-
+        self.base_train_it = self.total_base_train_steps // (self.num_envs * self.num_steps)
         if self.seed != None:
             assert(type(self.seed) == int)
 
@@ -318,7 +248,7 @@ class PPO:
         delta_t = self.logger['delta_t']
         self.logger['delta_t'] = time.time_ns()
         delta_t = (self.logger['delta_t'] - delta_t) / 1e9
-        delta_t = str(round(delta_t, 2))
+        
         rollout_t = str(round(self.logger['rollout_compute'], 2))
         grad_t = str(round(self.logger['grad_compute'], 2))
 
@@ -336,14 +266,13 @@ class PPO:
                 "learning_rate": lr,
                 "iteration_compute": delta_t
             })
-        
         delta_t = str(round(delta_t, 2))
 
         avg_ep_rews = str(round(avg_ep_rews, 2))
         avg_actor_loss = str(round(avg_actor_loss, 5))
 
         print(flush=True)
-        print(f"-------------------- Iteration #{i_so_far} --------------------", flush=True)
+        print(f"-------------------- Iteration {i_so_far}/{self.base_train_it} --------------------", flush=True)
         print(f"Average Episodic Return: {avg_ep_rews}", flush=True)
         print(f"Average Loss: {avg_actor_loss}", flush=True)
         print(f"Average KL Divergence: {avg_kl}", flush=True)

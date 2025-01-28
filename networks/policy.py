@@ -7,17 +7,14 @@ from torch.distributions import MultivariateNormal
 class AdaptivePolicy(nn.Module):
     """ Actor Critic Model."""
 
-    def __init__(self, obs_dim, action_dim, latent_size=1, encoder_hidden_dims=[64, 32], std = 0.5):
+    def __init__(self, obs_dim, action_dim, latent_size=1, encoder_hidden_dims=[64, 32], activation=nn.Tanh):
         """
             Initialize parameters and build model.
         """
         
         super(AdaptivePolicy, self).__init__()
 
-        self.encoder = MLP(obs_dim, latent_size, encoder_hidden_dims)
-
-        self.register_buffer('cov_var', torch.full(size=(action_dim,), fill_value=std))
-        self.register_buffer('cov_mat', torch.diag(self.cov_var))
+        self.encoder = MLP(obs_dim, latent_size, encoder_hidden_dims, activation)
 
 
     def encode(self, obs):
@@ -27,7 +24,8 @@ class AdaptivePolicy(nn.Module):
     def sample_action(self, obs):
         ext_obs = self.encode(obs)
         mean = self.actor(ext_obs)
-        dist = MultivariateNormal(mean, self.cov_mat)
+        action_std = torch.exp(self.actor_logstd)
+        dist = torch.distributions.Normal(mean, action_std)
         return dist.sample()
     
     def store_savestate(self, checkpoint_path):
