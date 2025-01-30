@@ -12,13 +12,14 @@ from utils.storage import Storage
 class PPO:
     """PPO Algorithm Implementation."""
 
-    def __init__(self, summary_writter=None, env = LunarContinuous, policy_class = ActorCritic, activation=nn.ReLU, **hyperparameters):
+    def __init__(self, summary_writter=None, env = LunarContinuous, policy_class = ActorCritic, activation=nn.ReLU, env_args={}, **hyperparameters):
         """
 			Initializes the PPO model, including hyperparameters.
 		"""
         # Extract environment information
+        self.env_args = env_args
         self.env_class = env
-        self.env = env()
+        self.env = env(**env_args)
         self.obs_dim, self.act_dim =  self.env.get_environment_shape()
          
         # Initialize hyperparameters for training with PPO
@@ -187,9 +188,9 @@ class PPO:
 
     def validate(self, val_iter, should_record=False):
         if should_record:
-            env = self.env_class(num_envs=val_iter,should_record='True')
+            env = self.env_class(num_envs=val_iter,should_record='True',**self.env_args)
         else:
-            env = self.env_class(num_envs=val_iter)
+            env = self.env_class(num_envs=val_iter,**self.env_args)
         obs, done  = env.reset()
         self.policy.to(self.device)
         t = np.array([0]*val_iter, dtype=float)
@@ -209,7 +210,7 @@ class PPO:
 
     def test(self):
         self.policy.cpu()
-        env = self.env_class(num_envs=1,render_mode='human')
+        env = self.env_class(num_envs=1,render_mode='human',**self.env_args)
         while True:
                 obs, done = env.reset()
                 t = 1

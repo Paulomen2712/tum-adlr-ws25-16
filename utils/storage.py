@@ -91,19 +91,21 @@ class Storage():
         return self.values.transpose(0,1).flatten()
     
 class AdaptStorage():
-    def __init__(self, num_steps, num_envs, obs_dim, device='cuda'):
+    def __init__(self, num_steps, num_envs, obs_dim, act_dim, device='cuda'):
         self.device = torch.device(device)
         self.obs = torch.zeros((num_steps, num_envs, obs_dim), device=self.device)
+        self.actions = torch.zeros((num_steps, num_envs, act_dim), device=self.device)
         self.values = torch.zeros((num_steps, num_envs), device=self.device)
         self.obs_dim = obs_dim
         self.num_steps = num_steps
         self.step = 0
         self.device = device
 
-    def store_obs(self, obs, z):
+    def store_obs(self, obs, actions, z):
         if self.step >= self.num_steps:
             raise AssertionError("Rollout buffer overflow")
         self.obs[self.step].copy_(torch.from_numpy(obs).to(self.device))
+        self.actions[self.step].copy_(actions)
         # self.values[self.step].copy_(torch.from_numpy(obs)[:,-1].to(self.device))
         self.values[self.step].copy_(z)
         self.step += 1
@@ -112,4 +114,4 @@ class AdaptStorage():
         self.step = 0
     
     def get_rollot_data(self):
-        return self.obs.transpose(0,1).reshape((-1,self.obs_dim)), self.values.transpose(0,1).flatten()
+        return self.obs.transpose(0,1), self.actions.transpose(0,1), self.values.transpose(0,1)

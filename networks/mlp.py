@@ -46,11 +46,17 @@ class MLP(nn.Module):
     def forward(self, x):
         return self.model(x)
     
+class DummyEncoder(nn.Module):
+    def __init__(self):
+        super(DummyEncoder, self).__init__()
+    
+    def forward(self, x):
+        return x[:, -1]
 
 class LSTM(nn.Module):
     """ LSTM-based sequence encoder. """
 
-    def __init__(self, input_dim, output_dim, hidden_dims=[64], num_layers=1, batch_first=True):
+    def __init__(self, input_dim, output_dim, hidden_dims=[8], num_layers=1, batch_first=True):
         """
         Initialize parameters and build model.
 
@@ -74,7 +80,7 @@ class LSTM(nn.Module):
         # Fully connected layer to map LSTM output to the desired output dimension
         self.fc = nn.Linear(hidden_dims[0], output_dim)
 
-    def forward(self, x):
+    def forward(self, x, hidden):
         """
         Forward pass through the LSTM.
 
@@ -84,13 +90,13 @@ class LSTM(nn.Module):
         Returns:
             Output tensor of shape (batch_size, output_dim).
         """
-        # Pass through LSTM
-        lstm_out, _ = self.lstm(x)  # lstm_out shape: (batch_size, seq_len, hidden_size)
+        if len(x.shape) == 2:
+            x = x.unsqueeze(1)
 
-        # Take the output of the last timestep
-        last_timestep_output = lstm_out[:, -1, :]  # Shape: (batch_size, hidden_size)
+        # Pass through LSTM
+        lstm_out, (h_n, c_n) = self.lstm(x, hidden)  # lstm_out shape: (batch_size, seq_len, hidden_size)
 
         # Map to output dimension
-        output = self.fc(last_timestep_output)  # Shape: (batch_size, output_dim)
+        output = self.fc(lstm_out)  # Shape: (batch_size, output_dim)
 
-        return output
+        return output, h_n, c_n

@@ -163,6 +163,7 @@ class AntEnv(MujocoEnv, utils.EzPickle):
     | `contact_force_range`   | **tuple**  | `(-1, 1)`    | Contact forces are clipped to this range in the computation of *contact_cost* |
     | `reset_noise_scale`     | **float**  | `0.1`        | Scale of random perturbations of initial position and velocity (see section on Starting State) |
     | `exclude_current_positions_from_observation`| **bool** | `True`| Whether or not to omit the x- and y-coordinates from observations. Excluding the position can serve as an inductive bias to induce position-agnostic behavior in policies |
+    | `known_disturbances`| **bool** | `True`| True if observations should be known by the controller |
 
     ### Version History
     * v4: all mujoco environments now use the mujoco bindings in mujoco>=2.1.3
@@ -193,6 +194,7 @@ class AntEnv(MujocoEnv, utils.EzPickle):
         contact_force_range=(-1.0, 1.0),
         reset_noise_scale=0.1,
         exclude_current_positions_from_observation=True,
+        known_disturbances=False,
         **kwargs
     ):
         utils.EzPickle.__init__(
@@ -226,12 +228,9 @@ class AntEnv(MujocoEnv, utils.EzPickle):
         self._exclude_current_positions_from_observation = (
             exclude_current_positions_from_observation
         )
+        self.known_disturbances = known_disturbances
 
-        obs_shape = 27
-        if not exclude_current_positions_from_observation:
-            obs_shape += 2
-        if use_contact_forces:
-            obs_shape += 84
+        obs_shape = self.get_obs_shape()
 
         observation_space = Box(
             low=-np.inf, high=np.inf, shape=(obs_shape,), dtype=np.float64
@@ -320,17 +319,19 @@ class AntEnv(MujocoEnv, utils.EzPickle):
     def _get_obs(self):
         position = self.data.qpos.flat.copy()
         velocity = self.data.qvel.flat.copy()
+        disturbance = self._get_disturbance().flat.copy()
 
         if self._exclude_current_positions_from_observation:
             position = position[2:]
 
         if self._use_contact_forces:
             contact_force = self.contact_forces.flat.copy()
-            return np.concatenate((position, velocity, contact_force))
+            return np.concatenate((position, velocity, disturbance, contact_force))
         else:
-            return np.concatenate((position, velocity))
+            return np.concatenate((position, velocity, disturbance))
 
     def reset_model(self):
+        self.add_disturbance()
         noise_low = -self._reset_noise_scale
         noise_high = self._reset_noise_scale
 
@@ -346,6 +347,28 @@ class AntEnv(MujocoEnv, utils.EzPickle):
         observation = self._get_obs()
 
         return observation
+
+    def add_disturbance(self):
+        pass
+
+    def _get_disturbance(self):
+        if not self.known_disturbances:
+            return np.array([])
+
+        return np.array(self.get_disturbance())
+    
+    def get_disturbance(self):
+        return []
+    
+    def get_obs_shape(self):
+        obs_shape = 27
+        if self.known_disturbances:
+            obs_shape += self.get_disturbance_shape()
+        if not self._exclude_current_positions_from_observation:
+            obs_shape += 2
+        if self._use_contact_forces:
+            obs_shape += 84
+        return obs_shape
 
     def viewer_setup(self):
         assert self.viewer is not None

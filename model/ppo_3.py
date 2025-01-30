@@ -1,6 +1,7 @@
 import torch
 from networks.base_policy import ActorCriticWithEncoder
 from networks.adaptive_module import AdaptiveActorCritic
+from networks.LSTMAdaptiveActorCritic import LSTMAdaptiveActorCritic
 # from networks.adaptive_module_2 import AdaptiveActorCritic
 from env.wrappers import LunarContinuous
 import torch.nn as nn
@@ -14,13 +15,14 @@ from utils.storage import Storage, AdaptStorage
 class PPO:
     """PPO Algorithm Implementation."""
 
-    def __init__(self, summary_writter=None, env = LunarContinuous, policy_class = ActorCriticWithEncoder, activation=nn.ReLU, **hyperparameters):
+    def __init__(self, summary_writter=None, env = LunarContinuous, policy_class = ActorCriticWithEncoder, adaptive_class=AdaptiveActorCritic, activation=nn.ReLU, env_args={}, **hyperparameters):
         """
 			Initializes the PPO model, including hyperparameters.
 		"""
         # Extract environment information
+        self.env_args = env_args
         self.env_class = env
-        self.env = env()
+        self.env = env(**self.env_args)
         self.obs_dim, self.act_dim =  self.env.get_environment_shape()
          
         # Initialize hyperparameters for training with PPO
@@ -28,14 +30,14 @@ class PPO:
         self._init_hyperparameters(hyperparameters)
         self.storage = Storage(self.num_steps, self.num_envs, self.obs_dim, self.act_dim, self.gamma, self.lam, self.normalize_advantages, self.device)
 
-        self.adp_env = env(num_envs=self.num_adp_envs)
-        self.adp_storage = AdaptStorage(self.adp_num_steps, self.num_adp_envs, self.obs_dim, self.device )
+        self.adp_env = env(num_envs=self.num_adp_envs, **self.env_args)
+        self.adp_storage = AdaptStorage(self.adp_num_steps, self.num_adp_envs, self.obs_dim, self.act_dim, self.device )
 
         # Initialize actor and critic
         self.policy = policy_class(self.obs_dim, self.act_dim, lr=self.lr, hidden_dims=self.hidden_dims, encoder_hidden_dims=self.encoder_hidden_dims, activation=activation)
         self.actor = self.policy.actor                                              
         self.critic = self.policy.critic
-        self.adapt_policy = AdaptiveActorCritic(self.obs_dim, self.act_dim, lr=self.adp_lr, encoder_hidden_dims=self.adp_encoder_hidden_dims, history_len=self.history_len, activation=activation)
+        self.adapt_policy = adaptive_class(self.obs_dim, self.act_dim, lr=self.adp_lr, encoder_hidden_dims=self.adp_encoder_hidden_dims, history_len=self.history_len)
         self.adpt_module = self.adapt_policy.encoder
         
 
@@ -148,7 +150,7 @@ class PPO:
                 os.makedirs(os.path.dirname(save_path), exist_ok=True)
                 torch.save(self.policy.state_dict(), save_path)
 
-    def train_adaptive_module(self):
+    def train_adaptive_module2(self):
         self.adapt_policy.set_policy(self.policy)
         self.adapt_policy.to(self.device)
         for ad_it in range(0, self.adp_train_it):
@@ -162,40 +164,74 @@ class PPO:
                 self.logger['adp_lr'] = self.adp_lr = adp_lr
 
             rollout_start = time.time_ns() 
-            self.adapt_policy.clear_history()
-            obs, values = self.adpt_rollout()
+            obs, actions, values = self.adpt_rollout()
             rollout_end = time.time_ns() 
 
             self.logger['i_so_far'] = ad_it + 1
             self.logger['rollout_compute'] = (rollout_end - rollout_start) / 1e9
 
 
-            batch_size = obs.size(0)
+            batch_size = obs.size(1)
             inds = np.arange(batch_size)
             sgdbatch_size = batch_size // self.n_sgd_batches
             loss = []
 
             grad_start = time.time_ns() 
-            for _ in range(self.n_updates_per_iteration): 
+            for _ in range(1): 
 
                 #SGD
-                np.random.shuffle(inds)
                 for start in range(0, batch_size, sgdbatch_size):
                     end = start + sgdbatch_size
                     idx = inds[start:end]
+
+                    batch_obs = obs[:,idx]
+                    batch_acts = actions[:,idx]
+                    batch_values = values[:,idx]
                     
-                    #Restrict values to current batch
-                    batch_obs = obs[idx]
-                    batch_values = values[idx]
-                    pred_batch_values = self.adapt_policy.evaluate(batch_obs)
+                    pred_batch_values = self.adapt_policy.evaluate(batch_obs, batch_acts)
                     
-                    # BUG: Using batch_values is wrong of the critic is wrong. Should use base_encoder Z
                     adp_loss = self.update_adpt(pred_batch_values, batch_values)
                     loss.append(adp_loss.detach().item())
                 self.logger['adp_losses'].append(np.mean(loss))
 
             grad_end = time.time_ns()
             self.logger['grad_compute'] = (grad_end - grad_start) / 1e9
+            self._log_summary_adp()
+
+    def train_adaptive_module(self):
+        self.adapt_policy.set_policy(self.policy)
+        self.adapt_policy.to(self.device)
+        for ad_it in range(0, self.adp_train_it):
+            if self.anneal_lr:
+                frac = ad_it / (self.adp_train_it + self.anneal_discount) 
+                adp_lr = self.adp_lr * (1.0 - frac)
+
+                self.adapt_optim.param_groups[0]["lr"] = adp_lr
+                # Log learning rate
+                self.adp_lr = adp_lr
+                self.logger['adp_lr'] = self.adp_lr = adp_lr
+
+            self.logger['i_so_far'] = ad_it + 1
+            self.adapt_policy.clear_history()
+            loss = []
+            next_obs, _ = self.adp_env.reset()
+            prev_action = torch.zeros((self.num_adp_envs, self.act_dim)).to(device=self.device, dtype=torch.float32).requires_grad_()
+            for _ in range(self.adp_num_steps):
+                obs = next_obs.copy() 
+                obs_tensor = torch.from_numpy(obs).to(device=self.device, dtype=torch.float32).requires_grad_()
+                action= self.policy.sample_action(obs_tensor)
+                with torch.no_grad():
+                    z = self.policy.encode(obs_tensor)[:, -1]
+                adp_z = self.adapt_policy.evaluate(obs_tensor, prev_action)
+                prev_action = action.clone()
+
+                next_obs, _, _ = self.adp_env.step(action.cpu().numpy())
+
+                adp_loss = self.update_adpt(adp_z, z)
+                loss.append(adp_loss.detach().item())
+            self.logger['adp_losses'].append(np.mean(loss))
+
+            self.logger['grad_compute'] = (0) / 1e9
             self._log_summary_adp()
 
     def rollout(self):
@@ -224,17 +260,18 @@ class PPO:
 
     def adpt_rollout(self):
         self.adp_storage.clear()
-
+        self.adapt_policy.clear_history()
+        prev_action = torch.zeros((self.num_adp_envs, self.act_dim)).to(device=self.device, dtype=torch.float32).requires_grad_()
         next_obs, _ = self.adp_env.reset()
         for _ in range(self.adp_num_steps):
             obs = next_obs.copy() 
+            obs_tensor = torch.from_numpy(obs).to(device=self.device, dtype=torch.float32)
+            action, z= self.policy.sample_action(obs_tensor)
 
-            actions= self.policy.sample_action(torch.from_numpy(next_obs).to(self.device, torch.float32))
-            z = self.policy.encode(torch.from_numpy(next_obs).to(self.device)).detach()[:, -1]
+            next_obs, _, _ = self.adp_env.step(action.cpu().numpy())
 
-            next_obs, _, _ = self.adp_env.step(actions.cpu().numpy())
-
-            self.adp_storage.store_obs(obs, z)
+            self.adp_storage.store_obs(obs, prev_action, z)
+            prev_action = action
         return self.adp_storage.get_rollot_data()
 
     def update_actor(self, pred_log_probs, log_probs, advantages, entropies):
@@ -301,7 +338,7 @@ class PPO:
         adapt_loss = nn.MSELoss()(pred_values.squeeze(), values.squeeze())
         
         self.adapt_optim.zero_grad()
-        adapt_loss.backward()
+        adapt_loss.backward(retain_graph=True)
         # if self.clip_grad:
         #     nn.utils.clip_grad_norm_(self.adpt_module.parameters(), self.max_grad_norm)
         self.adapt_optim.step()
@@ -319,9 +356,9 @@ class PPO:
 
     def validate(self, val_iter, should_record=False, use_adaptive=False, interupt=True):
         if should_record:
-            env = self.env_class(num_envs=val_iter,should_record='True')
+            env = self.env_class(num_envs=val_iter,should_record='True', **self.env_args)
         else:
-            env = self.env_class(num_envs=val_iter)
+            env = self.env_class(num_envs=val_iter, **self.env_args)
         if use_adaptive:
             self.adapt_policy.clear_history()
             policy = self.adapt_policy
@@ -339,7 +376,7 @@ class PPO:
             t_sim+=1
             not_done = np.array([1]*val_iter, dtype=float) - done
             t += not_done
-            action = policy.sample_action(torch.Tensor(obs).to(self.device))
+            action, _ = policy.sample_action(torch.Tensor(obs).to(self.device))
             obs, rew, next_done = env.step(action.cpu().numpy())
             done |= next_done
             ep_ret += rew * not_done
@@ -358,17 +395,16 @@ class PPO:
         base_z = []
         adpt_z = []
 
-        env = self.env_class(num_envs=1,should_record='True')
+        env = self.env_class(num_envs=1,should_record='True', **self.env_args)
         obs, done = env.reset()
 
         while not done[0]:
             true_wind_vals.append(obs[0, -1])
 
             obs_tensor = torch.tensor(obs, dtype=torch.float32).to(self.device)
-            action = self.adapt_policy.sample_action(obs_tensor)
+            action, adpt_output = self.adapt_policy.sample_action(obs_tensor)
 
             base_output = self.policy.encoder(obs_tensor).detach().cpu().numpy().flatten()[0]
-            adpt_output = self.adapt_policy.encode(obs_tensor).detach().cpu().numpy().squeeze()[-1]
 
             base_z.append(base_output)
             adpt_z.append(adpt_output)
@@ -380,12 +416,12 @@ class PPO:
         self.adapt_policy.clear_history()
         adpt_policy = self.adapt_policy
 
-        env = self.env_class(num_envs=num_envs)
+        env = self.env_class(num_envs=num_envs, **self.env_args)
         
         obs, done  = env.reset()
 
         for _ in range(num_steps):
-            adpt_policy_action = adpt_policy.sample_action(torch.Tensor(obs).to(self.device))
+            adpt_policy_action, adpt_output = adpt_policy.sample_action(torch.Tensor(obs).to(self.device))
 
             obs, _, _ = env.step(adpt_policy_action.cpu().numpy())
 
@@ -394,7 +430,6 @@ class PPO:
         
         obs_tensor = torch.tensor(obs, dtype=torch.float32).to(self.device)
         base_output = self.policy.encoder(obs_tensor).cpu().detach().numpy().flatten()
-        adpt_output = self.adapt_policy.encode(obs_tensor).cpu().detach().numpy().squeeze()[:, -1]
 
         return true_winds, base_output, adpt_output
 
@@ -405,11 +440,11 @@ class PPO:
         else:
             policy = self.policy
         policy.cpu()
-        env = self.env_class(num_envs=1,render_mode='human')
+        env = self.env_class(num_envs=1,render_mode='human', **self.env_args)
         while True:
                 obs, done = env.reset()
                 while not done[0]:
-                    action = policy.sample_action(torch.Tensor(obs))
+                    action, _  = policy.sample_action(torch.Tensor(obs))
                     obs, _, done = env.step(action.numpy())
 
     def _init_hyperparameters(self, hyperparameters):

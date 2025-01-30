@@ -2,10 +2,12 @@ import gym
 from gym.vector import SyncVectorEnv
 from gym.wrappers import RecordVideo
 from gym.envs.box2d import LunarLander
+import gym.wrappers
 from env.lunar_lander import LunarLanderWithWind
 from env.ant import AntEnv
 import numpy as np
 import yaml
+import os
 
 class VectorEnvironment(SyncVectorEnv):
     """ Base class for wrapping environments. """
@@ -158,12 +160,12 @@ class LunarLanderWithUnknownWind(LunarLanderWithKnownWind):
 class Ant(GymVectorEnvironment):
     """ OpenAi Ant Environment Wrapper. """
 
-    def _make_environment(self, **args):
-        env = AntEnv(**args)
+    def _make_environment(self, env_class=AntEnv, **args):
+        env = gym.wrappers.TimeLimit(env_class(xml_file=os.path.abspath("env/ant.xml"),**args), max_episode_steps=1000)
         return env
     
     def _get_config_path(self):
         return "./configs/Ant.yaml"
     
     def get_environment_shape(self):
-        return 27, 8
+        return self.envs[0].get_obs_shape(), 8
