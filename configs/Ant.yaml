@@ -4,9 +4,9 @@ num_envs: 100                              # Number of independent environments 
 num_steps: 400                            # Number of timesteps per environment
 
 #Adapt Module
-adp_train_it: 30                       # Total iterations to train the base policy
-num_adp_envs: 100
-adp_num_steps: 100                        # Number of timesteps per environment
+adp_train_it: 100                       # Total iterations to train the base policy
+num_adp_envs: 50
+adp_num_steps: 200                        # Number of timesteps per environment
 
 #GAE
 gamma: 0.99                               # Discount factor for the rewards 
@@ -21,8 +21,8 @@ history_len: 20
 
 # Backprop
 n_updates_per_iteration: 10                # Number of times to update policy per iteration
-adp_lr: 0.005
-lr: 0.005 
+adp_lr: 0.003
+lr: 0.001 
 clip: 0.2                                 # Clip ratio for ppo loss. Using recomended 0.2
 clip_grad: True
 max_grad_norm: 0.5                       # Gradient clipping threshold

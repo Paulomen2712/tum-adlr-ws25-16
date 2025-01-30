@@ -237,6 +237,68 @@ class PPO:
             self.logger['grad_compute'] = (0) / 1e9
             self._log_summary_adp()
 
+    def train_adaptive_module3(self):
+        """Trains adaptive model with lstm only works with LSTMAdaptiveActorCritic"""
+        self.adapt_policy.set_policy(self.policy)
+        self.adapt_policy.to(self.device)
+        for ad_it in range(0, self.adp_train_it):
+            if self.anneal_lr:
+                frac = ad_it / (self.adp_train_it + self.anneal_discount) 
+                adp_lr = self.adp_lr * (1.0 - frac)
+
+                self.adapt_optim.param_groups[0]["lr"] = adp_lr
+                # Log learning rate
+                self.adp_lr = adp_lr
+                self.logger['adp_lr'] = self.adp_lr = adp_lr
+            labels = []
+            vals = []
+            rollout_start = time.time_ns() 
+            next_obs, _ = self.adp_env.reset()
+            prev_action = torch.zeros((self.num_adp_envs, self.act_dim)).to(device=self.device, dtype=torch.float32).requires_grad_()
+            for _ in range(self.adp_num_steps):
+                obs = next_obs.copy() 
+                obs_tensor = torch.from_numpy(obs).to(device=self.device, dtype=torch.float32)
+                action= self.policy.sample_action(obs_tensor)
+                with torch.no_grad():
+                    z = self.policy.encode(obs_tensor)[:, -1]
+                adp_z = self.adapt_policy.evaluate(obs_tensor, prev_action)
+                prev_action = action.clone()
+                labels.append(z.flatten())
+                vals.append(adp_z.flatten())    
+                next_obs, _, _ = self.adp_env.step(action.cpu().numpy())
+            rollout_end = time.time_ns() 
+
+            self.logger['i_so_far'] = ad_it + 1
+            self.logger['rollout_compute'] = (rollout_end - rollout_start) / 1e9
+
+            values = torch.stack(vals).flatten()
+            labels = torch.stack(labels).flatten()
+
+            batch_size = values.size(0)
+            inds = np.arange(batch_size)
+            sgdbatch_size = batch_size // self.n_sgd_batches
+            loss = []
+
+            grad_start = time.time_ns() 
+            for _ in range(self.n_updates_per_iteration): 
+
+                #SGD
+                for start in range(0, batch_size, sgdbatch_size):
+                    end = start + sgdbatch_size
+                    idx = inds[start:end]
+                    batch_values = labels[idx]
+                    
+                    pred_batch_values = values[idx]
+                    
+                    adp_loss = self.update_adpt(pred_batch_values, batch_values)
+                    loss.append(adp_loss.detach().item())
+                self.logger['adp_losses'].append(np.mean(loss))
+
+            grad_end = time.time_ns()
+            self.logger['grad_compute'] = (grad_end - grad_start) / 1e9
+            self._log_summary_adp()
+
+
     def rollout(self):
         """
             Collects batch of simulated data.
@@ -422,19 +484,22 @@ class PPO:
         env = self.env_class(num_envs=num_envs, **self.env_args)
         
         obs, done  = env.reset()
+        true_winds = obs[:, -1]
+        base_output = torch.zeros((num_steps, num_envs))
+        adpt_output = torch.zeros((num_steps, num_envs))
 
-        for _ in range(num_steps):
-            adpt_policy_action, adpt_output = adpt_policy.sample_action(torch.Tensor(obs).to(self.device))
+        for step in range(num_steps):
+            obs_tensor = torch.tensor(obs, dtype=torch.float32).to(self.device)
+            adpt_policy_action, z = adpt_policy.sample_action(obs_tensor)
 
             obs, _, _ = env.step(adpt_policy_action.cpu().numpy())
+            base_output[step] = self.policy.encoder(obs_tensor).cpu().detach().flatten()
+            adpt_output[step] = z.cpu()
 
         
-        true_winds = obs[:, -1]
         
-        obs_tensor = torch.tensor(obs, dtype=torch.float32).to(self.device)
-        base_output = self.policy.encoder(obs_tensor).cpu().detach().numpy().flatten()
 
-        return true_winds, base_output, adpt_output
+        return true_winds, base_output.mean(0), adpt_output.mean(0)
 
     def test(self, use_adaptive=True):
         if use_adaptive:
