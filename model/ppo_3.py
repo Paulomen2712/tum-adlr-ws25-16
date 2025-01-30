@@ -9,13 +9,14 @@ import numpy as np
 import time
 import wandb
 import os
+from networks.mlp import MLP
 from utils.storage import Storage, AdaptStorage
 
 
 class PPO:
     """PPO Algorithm Implementation."""
 
-    def __init__(self, summary_writter=None, env = LunarContinuous, policy_class = ActorCriticWithEncoder, adaptive_class=AdaptiveActorCritic, activation=nn.ReLU, env_args={}, **hyperparameters):
+    def __init__(self, summary_writter=None, env = LunarContinuous, policy_class = ActorCriticWithEncoder, adaptive_class=AdaptiveActorCritic, base_encoder_class =MLP, activation=nn.ReLU, env_args={}, **hyperparameters):
         """
 			Initializes the PPO model, including hyperparameters.
 		"""
@@ -34,7 +35,7 @@ class PPO:
         self.adp_storage = AdaptStorage(self.adp_num_steps, self.num_adp_envs, self.obs_dim, self.act_dim, self.device )
 
         # Initialize actor and critic
-        self.policy = policy_class(self.obs_dim, self.act_dim, lr=self.lr, hidden_dims=self.hidden_dims, encoder_hidden_dims=self.encoder_hidden_dims, activation=activation)
+        self.policy = policy_class(self.obs_dim, self.act_dim, lr=self.lr, hidden_dims=self.hidden_dims, encoder_hidden_dims=self.encoder_hidden_dims, activation=activation, encoder_class=base_encoder_class)
         self.actor = self.policy.actor                                              
         self.critic = self.policy.critic
         self.adapt_policy = adaptive_class(self.obs_dim, self.act_dim, lr=self.adp_lr, encoder_hidden_dims=self.adp_encoder_hidden_dims, history_len=self.history_len)
@@ -151,6 +152,7 @@ class PPO:
                 torch.save(self.policy.state_dict(), save_path)
 
     def train_adaptive_module2(self):
+        """Trains adaptive model with lstm only works with LSTMAdaptiveActorCritic"""
         self.adapt_policy.set_policy(self.policy)
         self.adapt_policy.to(self.device)
         for ad_it in range(0, self.adp_train_it):
@@ -199,6 +201,7 @@ class PPO:
             self._log_summary_adp()
 
     def train_adaptive_module(self):
+        """Trains adaptive model without lstm only works with AdaptiveActorCritic"""
         self.adapt_policy.set_policy(self.policy)
         self.adapt_policy.to(self.device)
         for ad_it in range(0, self.adp_train_it):
@@ -215,10 +218,10 @@ class PPO:
             self.adapt_policy.clear_history()
             loss = []
             next_obs, _ = self.adp_env.reset()
-            prev_action = torch.zeros((self.num_adp_envs, self.act_dim)).to(device=self.device, dtype=torch.float32).requires_grad_()
+            prev_action = torch.zeros((self.num_adp_envs, self.act_dim)).to(device=self.device, dtype=torch.float32)
             for _ in range(self.adp_num_steps):
                 obs = next_obs.copy() 
-                obs_tensor = torch.from_numpy(obs).to(device=self.device, dtype=torch.float32).requires_grad_()
+                obs_tensor = torch.from_numpy(obs).to(device=self.device, dtype=torch.float32)
                 action= self.policy.sample_action(obs_tensor)
                 with torch.no_grad():
                     z = self.policy.encode(obs_tensor)[:, -1]

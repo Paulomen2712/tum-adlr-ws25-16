@@ -47,11 +47,11 @@ class MLP(nn.Module):
         return self.model(x)
     
 class DummyEncoder(nn.Module):
-    def __init__(self):
+    def __init__(self, **args):
         super(DummyEncoder, self).__init__()
     
     def forward(self, x):
-        return x[:, -1]
+        return x[..., -1]
 
 class LSTM(nn.Module):
     """ LSTM-based sequence encoder. """

@@ -7,14 +7,14 @@ from torch.distributions import MultivariateNormal
 class AdaptivePolicy(nn.Module):
     """ Actor Critic Model."""
 
-    def __init__(self, obs_dim, action_dim, latent_size=1, encoder_hidden_dims=[64, 32], activation=nn.ELU, last_activation=None):
+    def __init__(self, obs_dim, action_dim, latent_size=1, encoder_hidden_dims=[64, 32], encoder_class = MLP, activation=nn.ELU, last_activation=None):
         """
             Initialize parameters and build model.
         """
         
         super(AdaptivePolicy, self).__init__()
 
-        self.encoder = MLP(obs_dim, latent_size, encoder_hidden_dims, activation, last_activation)
+        self.encoder = encoder_class(obs_dim, latent_size, encoder_hidden_dims, activation, last_activation)
 
 
     def encode(self, obs):

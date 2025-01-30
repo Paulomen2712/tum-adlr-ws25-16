@@ -9,12 +9,12 @@ from networks.policy import AdaptivePolicy
 class ActorCriticWithEncoder(AdaptivePolicy):
     """ Actor Critic Model."""
 
-    def __init__(self, obs_dim, action_dim, latent_size=1, hidden_dims=[64], encoder_hidden_dims=[64, 32], lr=1e-5, activation=nn.ELU):
+    def __init__(self, obs_dim, action_dim, latent_size=1, hidden_dims=[64], encoder_hidden_dims=[64, 32], encoder_class = MLP, lr=1e-5, activation=nn.ELU):
         """
             Initialize parameters and build model.
         """
         
-        super(ActorCriticWithEncoder, self).__init__(obs_dim, action_dim, latent_size, encoder_hidden_dims, activation=activation, last_activation=nn.Tanh)
+        super(ActorCriticWithEncoder, self).__init__(obs_dim, action_dim, latent_size, encoder_hidden_dims, encoder_class, activation=activation, last_activation=nn.Tanh)
 
         # Actor network (outputs probabilities for possible actions)
         self.actor = MLP(obs_dim+latent_size, action_dim, hidden_dims,activation, last_activation = nn.Tanh)

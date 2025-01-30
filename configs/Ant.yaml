@@ -1,11 +1,12 @@
 #Base Policy
-total_base_train_steps: 5_000_000
+total_base_train_steps: 7_500_000
 num_envs: 100                              # Number of independent environments to train on
 num_steps: 400                            # Number of timesteps per environment
 
 #Adapt Module
-adp_train_it: 2                       # Total iterations to train the base policy
-adp_num_steps: 1200                        # Number of timesteps per environment
+adp_train_it: 30                       # Total iterations to train the base policy
+num_adp_envs: 100
+adp_num_steps: 100                        # Number of timesteps per environment
 
 #GAE
 gamma: 0.99                               # Discount factor for the rewards 
@@ -15,17 +16,18 @@ normalize_advantages: False
 #Network
 hidden_dims: [128, 64, 32]
 encoder_hidden_dims: [16, 4]
-adp_encoder_hidden_dims: [256, 128, 64]
+adp_encoder_hidden_dims: [256, 64, 16]
+history_len: 20
 
 # Backprop
 n_updates_per_iteration: 10                # Number of times to update policy per iteration
 adp_lr: 0.005
-lr: 0.003 
+lr: 0.005 
 clip: 0.2                                 # Clip ratio for ppo loss. Using recomended 0.2
 clip_grad: True
 max_grad_norm: 0.5                       # Gradient clipping threshold
 value_loss_norm: 0.5
-entropy_coef: 0.01
+entropy_coef: 0.1
 lr_gamma: 0.995                          # Gamma for scheduler
 n_sgd_batches: 32                         # Number of batches for sgd
 anneal_lr: False

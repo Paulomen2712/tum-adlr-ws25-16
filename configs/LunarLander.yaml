@@ -4,9 +4,9 @@ num_envs: 40                             # Number of independent environments to
 num_steps: 600                            # Number of timesteps per environment 800
 
 #Adapt Module
-adp_train_it: 70                      # Total iterations to train the base policy
+adp_train_it: 10                     # Total iterations to train the base policy
 num_adp_envs: 10
-adp_num_steps: 500                        # Number of timesteps per environment
+adp_num_steps: 300                        # Number of timesteps per environment
 
 #GAE
 gamma: 0.99                               # Discount factor for the rewards 
@@ -16,7 +16,7 @@ normalize_advantages: False
 #Network
 hidden_dims: [128, 64, 32]
 encoder_hidden_dims: [16, 4]
-adp_encoder_hidden_dims: [256, 64, 16]
+adp_encoder_hidden_dims: [2] #[256, 64, 16]
 history_len: 20
 
 # Backprop
