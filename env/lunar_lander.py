@@ -198,13 +198,22 @@ class LunarLanderWithWind(LunarLander):
         if self.game_over or abs(state[0]) >= 1.0:
             terminated = True
             reward = -100
-        if not self.lander.awake:
+        # if not self.lander.awake:
+        #     terminated = True
+        #     reward = +100
+        if self._is_done():
             terminated = True
             reward = +100
 
         if self.render_mode == "human":
             self.render()
         return np.array(state, dtype=np.float32), reward, terminated, False, {}
+    
+    def _is_done(self):
+        if not self.lander.awake:
+            return True
+        x = self.lander.position.x 
+        return self.legs[0].ground_contact and self.legs[1].ground_contact and (x >= self.helipad_x1 ) and (x <= self.helipad_x2) 
 
     def reset(self):
         """
