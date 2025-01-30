@@ -23,8 +23,6 @@ class PPO:
         # Extract environment information
         self.env_args = env_args
         self.env_class = env
-        self.env = env(**self.env_args)
-        self.obs_dim, self.act_dim =  self.env.get_environment_shape()
          
         # Initialize hyperparameters for training with PPO
         self.summary_writter = summary_writter
@@ -520,18 +518,16 @@ class PPO:
             Initialize default and custom values for hyperparameters
         """
 
-        config_hyperparameters = self.env.load_hyperparameters()
+        config_hyperparameters = self.env_class(num_envs=1).load_hyperparameters()
         for param, val in config_hyperparameters.items():
             setattr(self, param, val)
 
         for param, val in hyperparameters.items():
             exec('self.' + param + ' = ' + str(val))
         self.base_train_it = self.total_base_train_steps // (self.num_envs * self.num_steps)
-        if self.seed != None:
-            assert(type(self.seed) == int)
 
-            torch.manual_seed(self.seed)
-            print(f"Successfully set seed to {self.seed}")
+        self.env = self.env_class(num_envs=self.num_envs, **self.env_args)
+        self.obs_dim, self.act_dim =  self.env.get_environment_shape()
 
     def _get_save_path(self, iteration):
         if self.summary_writter is None:

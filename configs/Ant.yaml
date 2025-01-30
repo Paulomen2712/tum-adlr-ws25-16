@@ -1,5 +1,5 @@
 #Base Policy
-total_base_train_steps: 7_500_000
+total_base_train_steps: 10_500_000
 num_envs: 100                              # Number of independent environments to train on
 num_steps: 400                            # Number of timesteps per environment
 
@@ -11,7 +11,7 @@ adp_num_steps: 200                        # Number of timesteps per environment
 #GAE
 gamma: 0.99                               # Discount factor for the rewards 
 lam: 0.95                                 # Lambda Parameter for GAE 
-normalize_advantages: False
+normalize_advantages: True
 
 #Network
 hidden_dims: [128, 64, 32]
