@@ -14,7 +14,7 @@ class AdaptivePolicy(nn.Module):
         
         super(AdaptivePolicy, self).__init__()
 
-        self.encoder = encoder_class(obs_dim, latent_size, encoder_hidden_dims, activation, last_activation)
+        self.encoder = encoder_class(input_dim=obs_dim, output_dim=latent_size, hidden_dims=encoder_hidden_dims, activation=activation,last_activation=last_activation)
 
 
     def encode(self, obs):

@@ -51,7 +51,7 @@ class DummyEncoder(nn.Module):
         super(DummyEncoder, self).__init__()
     
     def forward(self, x):
-        return x[..., -1]
+        return x[..., -1].unsqueeze(-1)
 
 class LSTM(nn.Module):
     """ LSTM-based sequence encoder. """
