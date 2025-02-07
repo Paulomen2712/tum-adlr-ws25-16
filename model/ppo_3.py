@@ -177,7 +177,7 @@ class PPO:
             loss = []
 
             grad_start = time.time_ns() 
-            for _ in range(1): 
+            for _ in range(self.n_updates_per_iteration): 
 
                 #SGD
                 for start in range(0, batch_size, sgdbatch_size):
@@ -329,7 +329,9 @@ class PPO:
         for _ in range(self.adp_num_steps):
             obs = next_obs.copy() 
             obs_tensor = torch.from_numpy(obs).to(device=self.device, dtype=torch.float32)
-            action, z= self.policy.sample_action(obs_tensor)
+            action= self.policy.sample_action(obs_tensor)
+            with torch.no_grad():
+                z = self.policy.encode(obs_tensor)[:, -1]
 
             next_obs, _, _ = self.adp_env.step(action.cpu().numpy())
 
