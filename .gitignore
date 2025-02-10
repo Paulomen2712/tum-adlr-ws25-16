@@ -5,3 +5,4 @@
 **/videos
 **.pth
 .venv/
+mujoco-2.2.0-linux-aarch64.tar.gz

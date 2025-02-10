@@ -33,10 +33,10 @@ class PPO:
         self.adp_storage = AdaptStorage(self.adp_num_steps, self.num_adp_envs, self.obs_dim, self.act_dim, self.device )
 
         # Initialize actor and critic
-        self.policy = policy_class(self.obs_dim, self.act_dim, lr=self.lr, hidden_dims=self.hidden_dims, encoder_hidden_dims=self.encoder_hidden_dims, activation=activation, encoder_class=base_encoder_class)
+        self.policy = policy_class(self.obs_dim, self.act_dim, lr=self.lr, hidden_dims=self.hidden_dims, encoder_hidden_dims=self.encoder_hidden_dims, activation=activation, encoder_class=base_encoder_class, latent_size=self.latent_size)
         self.actor = self.policy.actor                                              
         self.critic = self.policy.critic
-        self.adapt_policy = adaptive_class(self.obs_dim, self.act_dim, lr=self.adp_lr, encoder_hidden_dims=self.adp_encoder_hidden_dims, history_len=self.history_len)
+        self.adapt_policy = adaptive_class(self.obs_dim, self.act_dim, lr=self.adp_lr, encoder_hidden_dims=self.adp_encoder_hidden_dims, history_len=self.history_len, latent_size=self.latent_size)
         self.adpt_module = self.adapt_policy.encoder
         
 

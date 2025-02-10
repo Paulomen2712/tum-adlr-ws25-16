@@ -1,7 +1,7 @@
-import gym
-from gym.vector import SyncVectorEnv
-from gym.wrappers import RecordVideo
-from gym.envs.box2d import LunarLander
+import gymnasium as gym
+from gymnasium.vector import SyncVectorEnv
+from gymnasium.wrappers import RecordVideo
+from gymnasium.envs.box2d import LunarLander  # Updated for gymnasium
 import gym.wrappers
 from env.lunar_lander import LunarLanderWithWind
 from env.ant import AntEnv

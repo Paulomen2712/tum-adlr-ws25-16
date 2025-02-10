@@ -43,6 +43,7 @@ class AdaptiveActorCritic(AdaptivePolicy):
         mask = torch.ones_like(obs)  
         mask[..., -1] = 0  
         obs_clone = obs.clone() * mask
+        # obs_clone = obs.clone()
         if not self.obs_history:
             self.obs_history.extend([torch.zeros_like(obs)] * self.history_len)
             self.obs_history.append(obs_clone)
