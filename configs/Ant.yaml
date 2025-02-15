@@ -1,6 +1,6 @@
 #Base Policy
-total_base_train_steps: 100_000_000
-num_envs: 100 # Number of independent environments to train on
+total_base_train_steps: 10000
+num_envs: 50 # Number of independent environments to train on
 num_steps: 400 # Number of timesteps per environment
 
 #Adapt Module
@@ -15,15 +15,15 @@ normalize_advantages: True
 
 #Network
 hidden_dims: [128, 64, 32]
-latent_size: 10
+latent_size: 1
 encoder_hidden_dims: [16, 4]
 adp_encoder_hidden_dims: [256, 64, 16]
 history_len: 20
 
 # Backprop
 n_updates_per_iteration: 10 # Number of times to update policy per iteration
-adp_lr: 0.003
-lr: 0.001
+adp_lr: 0.002
+lr: 0.0001
 clip: 0.2 # Clip ratio for ppo loss. Using recomended 0.2
 clip_grad: True
 max_grad_norm: 0.5 # Gradient clipping threshold

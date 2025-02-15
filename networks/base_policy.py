@@ -14,7 +14,7 @@ class ActorCriticWithEncoder(AdaptivePolicy):
             Initialize parameters and build model.
         """
         
-        super(ActorCriticWithEncoder, self).__init__(obs_dim, action_dim, latent_size, encoder_hidden_dims, encoder_class, activation=activation, last_activation=nn.Tanh)
+        super(ActorCriticWithEncoder, self).__init__(obs_dim, action_dim, latent_size, encoder_hidden_dims, encoder_class, activation=activation, last_activation=None)
 
         # Actor network (outputs probabilities for possible actions)
         self.actor = MLP(obs_dim+latent_size, action_dim, hidden_dims,activation, last_activation = nn.Tanh)

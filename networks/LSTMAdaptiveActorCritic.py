@@ -80,8 +80,9 @@ class LSTMAdaptiveActorCritic(nn.Module):
         z, h_n, c_n = self.encoder(torch.cat([obs_clone, action], dim=-1), (self.h.to(obs.device), self.c.to(obs.device)))  # Shape: (batch_size, latent_size)
         self.h = h_n
         self.c = c_n
+
         # Return the concatenated masked observation and encoded history
-        return torch.cat([obs_clone, z], dim=-1)
+        return torch.cat([obs_clone, z.squeeze(-1)], dim=-1)
 
     @torch.no_grad
     def sample_action(self, obs):
