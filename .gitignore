@@ -2,5 +2,5 @@
 **/ppo_parallel_checkpoints
 **/ppo_checkpoints
 **/__pycache__
-**/videos
 **.pth
+.venv/

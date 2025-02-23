@@ -1,6 +1,8 @@
 from gym.envs.box2d import LunarLander
 import numpy as np
+from gym import spaces
 import math
+import Box2D
 SCALE = 30.0
 MAIN_ENGINE_POWER = 13.0
 SIDE_ENGINE_POWER = 0.6
@@ -13,12 +15,51 @@ VIEWPORT_H = 400
 class LunarLanderWithWind(LunarLander):
     """
         Custom LunarLander environment with wind turbulence.
+        Adapted from https://github.com/openai/gym/blob/master/gym/envs/box2d/lunar_lander.py
     """
 
-    def __init__(self, min_wind_power = 15., max_wind_power=20., render_mode=None):
+    def __init__(self, min_wind_power = 15., max_wind_power=50., render_mode=None, wind_power=15):
         self.max_wind_power = max_wind_power
         self.min_wind_power = min_wind_power
-        super().__init__(render_mode=render_mode, continuous=True, enable_wind=True, wind_power=self.sample_wind())
+        super().__init__(render_mode=render_mode, continuous=True, enable_wind=True)
+        low = np.array(
+            [
+                # these are bounds for position
+                # realistically the environment should have ended
+                # long before we reach more than 50% outside
+                -1.5,
+                -1.5,
+                # velocity bounds is 5x rated speed
+                -5.0,
+                -5.0,
+                -math.pi,
+                -5.0,
+                -0.0,
+                -0.0,
+                -max_wind_power,
+            ]
+        ).astype(np.float32)
+        high = np.array(
+            [
+                # these are bounds for position
+                # realistically the environment should have ended
+                # long before we reach more than 50% outside
+                1.5,
+                1.5,
+                # velocity bounds is 5x rated speed
+                5.0,
+                5.0,
+                math.pi,
+                5.0,
+                1.0,
+                1.0,
+                max_wind_power,
+            ]
+        ).astype(np.float32)
+
+        # useful range is -1 .. +1, but spikes can be higher
+        self.observation_space = spaces.Box(low, high)
+        self.wind_power = self.sample_wind() if not wind_power else wind_power
         
 
     def get_wind_mag(self):
@@ -28,9 +69,6 @@ class LunarLanderWithWind(LunarLander):
         return self.wind_power
 
     def step(self, action):
-        """
-            Copied from https://github.com/openai/gym/blob/master/gym/envs/box2d/lunar_lander.py with minor adjustments
-        """
         assert self.lander is not None, "You forgot to call reset()"
 
         if self.enable_wind and not (
@@ -132,8 +170,9 @@ class LunarLanderWithWind(LunarLander):
             20.0 * self.lander.angularVelocity / FPS,
             1.0 if self.legs[0].ground_contact else 0.0,
             1.0 if self.legs[1].ground_contact else 0.0,
+            self.wind_power
         ]
-        assert len(state) == 8
+        assert len(state) == 9
 
         reward = 0
         shaping = (
@@ -157,13 +196,22 @@ class LunarLanderWithWind(LunarLander):
         if self.game_over or abs(state[0]) >= 1.0:
             terminated = True
             reward = -100
-        if not self.lander.awake:
+        # if not self.lander.awake:
+        #     terminated = True
+        #     reward = +100
+        if self._is_done():
             terminated = True
             reward = +100
 
         if self.render_mode == "human":
             self.render()
         return np.array(state, dtype=np.float32), reward, terminated, False, {}
+    
+    def _is_done(self):
+        if not self.lander.awake:
+            return True
+        x = self.lander.position.x 
+        return self.legs[0].ground_contact and self.legs[1].ground_contact and (x >= self.helipad_x1 ) and (x <= self.helipad_x2) 
 
     def reset(self):
         """
