@@ -5,28 +5,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 import wandb
-import io
-
-class SummaryWritter():
-    def log(self, cur_iteration):
-        pass
-        # avg_ep_lens = str(round(avg_ep_lens, 2))
-        # avg_ep_rews = str(round(avg_ep_rews, 2))
-        # avg_actor_loss = str(round(avg_actor_loss, 5))
-
-        # print(flush=True)
-        # print(f"-------------------- Iteration #{i_so_far} --------------------", flush=True)
-        # print(f"Average Episodic Length: {avg_ep_lens}", flush=True)
-        # print(f"Average Episodic Return: {avg_ep_rews}", flush=True)
-        # print(f"Average Loss: {avg_actor_loss}", flush=True)
-        # print(f"Timesteps So Far: {t_so_far}", flush=True)
-        # print(f"Iteration took: {delta_t} secs", flush=True)
-        # print(f"Current learning rate: {lr}", flush=True)
-        # print(f"------------------------------------------------------", flush=True)
-        # print(flush=True)
 
 class WandbSummaryWritter():
-    """Logger for wandb.com"""
+    """Logger for wandb.ai"""
 
     def __init__(self, project, config):
         wandb.login()
@@ -46,12 +27,14 @@ class WandbSummaryWritter():
         wandb.finish()
 
     def save_model(self, model, model_name):
+        """ Saves nn.Module to wandb current run dir and uploads as well."""
         torch.save(model.state_dict(), f"{wandb.run.dir}/{model_name}.pth")
         artifact = wandb.Artifact(model_name, type="model")
         artifact.add_file(f"{wandb.run.dir}/{model_name}.pth", f"{model_name}.pth")
         wandb.log_artifact(artifact)
 
     def save_histogram(self, data, data_name = 'Data', num_bins = 10):
+        """ Creates a histogram of the given data and uploads image of the plot to wandb"""
         median_value = np.median(data)
         fig, ax = plt.subplots(figsize=(8, 6))
         ax.hist(data, bins=num_bins, edgecolor='black', alpha=0.7, label=data_name)
@@ -66,4 +49,5 @@ class WandbSummaryWritter():
         plt.close(fig)
 
     def save_file(self, path):
+        """Stores file wo wandb."""
         wandb.save(path, base_path=os.path.dirname(path))

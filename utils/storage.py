@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 class Storage():
+    """Helper class to store rollout data"""
     def __init__(self, num_steps, num_envs, obs_dim, act_dim, gamma, lam, normalize_advantages=True, device='cuda'):
         self.device = torch.device(device)
         self.obs = torch.zeros((num_steps, num_envs, obs_dim), device=self.device)
@@ -36,6 +37,7 @@ class Storage():
         self.step += 1
 
     def compute_advantages(self, next_value):
+        """Computes GAE"""
         next_value = next_value.reshape(1, -1)
         last_lam = 0
         advantages = torch.zeros_like(self.rewards).to(self.device)
@@ -49,25 +51,12 @@ class Storage():
             advantages[t] = last_lam = delta + self.gamma * self.lam * next_non_terminal * last_lam
             self.returns[t,:] = advantages[t] + self.values[t]
         self.advantages = self.returns - self.values
-    
-    def compute_advantages2(self, next_value, next_done):
-        next_done = torch.Tensor(next_done).to(self.device)
-        self.returns = torch.zeros_like(self.rewards).to(self.device)
-        for t in reversed(range(self.num_steps)):
-            if t == self.num_steps - 1:
-                nextnonterminal = 1.0 - next_done
-                next_return = next_value
-            else:
-                nextnonterminal = 1.0 - self.dones[t + 1]
-                next_return = self.returns[t + 1]
-            self.returns[t] = self.rewards[t] + self.gamma * nextnonterminal * next_return
-        self.advantages = self.returns - self.values
 
     def clear(self):
         self.step = 0
     
     def get_average_episode_rewards(self):
-        # May not 100% represent the full episode rewards, but gives a good idea. Computes the rewards of the first finished episode per environment
+        # May not 100% represent the full episode rewards, but gives a good estimate. Computes the rewards of the first finished episode per environment
         # For more accurate results please validate the model with ppo.validate
         done_indices = torch.argmax(self.dones, dim=0)
         done_indices = torch.where(self.dones.any(dim=0), done_indices, self.num_steps)
@@ -78,6 +67,7 @@ class Storage():
         return sum_rewards.mean().cpu()
     
     def get_rollot_data(self):
+        """Retrieves rollout data in correct shape (n_envs * num_steps, ...)"""
         obs = self.obs.transpose(0,1).reshape((-1,self.obs_dim))
         logprobs = self.logprobs.transpose(0,1).flatten()
         actions = self.actions.transpose(0,1).reshape((-1, self.act_dim))
@@ -91,6 +81,7 @@ class Storage():
         return self.values.transpose(0,1).flatten()
     
 class AdaptStorage():
+    """Reduced storage for training adaptive module"""
     def __init__(self, num_steps, num_envs, obs_dim, act_dim, device='cuda'):
         self.device = torch.device(device)
         self.obs = torch.zeros((num_steps, num_envs, obs_dim), device=self.device)
@@ -106,7 +97,6 @@ class AdaptStorage():
             raise AssertionError("Rollout buffer overflow")
         self.obs[self.step].copy_(torch.from_numpy(obs).to(self.device))
         self.actions[self.step].copy_(actions)
-        # self.values[self.step].copy_(torch.from_numpy(obs)[:,-1].to(self.device))
         self.values[self.step].copy_(z)
         self.step += 1
 

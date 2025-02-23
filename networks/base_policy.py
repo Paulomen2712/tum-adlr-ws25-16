@@ -1,39 +1,44 @@
 import torch
 from torch import nn
 import torch.optim as optim
-from networks.mlp import MLP, Encoder
-import numpy as np
-from torch.distributions import MultivariateNormal
-from networks.policy import AdaptivePolicy
+from networks.mlp import MLP
 
-class ActorCriticWithEncoder(AdaptivePolicy):
-    """ Actor Critic Model."""
+class ActorCriticWithEncoder(nn.Module):
+    """ Actor Critic Model with encoded extrinsics concatenated to input."""
 
-    def __init__(self, obs_dim, action_dim, latent_size=1, hidden_dims=[64], encoder_hidden_dims=[64, 32], encoder_class = MLP, lr=1e-5, activation=nn.ELU):
+    def __init__(self, obs_dim, action_dim, latent_size=1, hidden_dims=[64], encoder_hidden_dims=[64, 32], encoder_class = MLP, lr=1e-5, activation=nn.ELU,last_activation=nn.Tanh):
         """
             Initialize parameters and build model.
         """
-        
-        super(ActorCriticWithEncoder, self).__init__(obs_dim, action_dim, latent_size, encoder_hidden_dims, encoder_class, activation=activation, last_activation=nn.Tanh)
-
-        # Actor network (outputs probabilities for possible actions)
+        super(ActorCriticWithEncoder, self).__init__()
+        self.encoder = encoder_class(input_dim=obs_dim, output_dim=latent_size, hidden_dims=encoder_hidden_dims, activation=activation,last_activation=last_activation)
+        # Actor network (outputs action mean)
         self.actor = MLP(obs_dim+latent_size, action_dim, hidden_dims,activation, last_activation = nn.Tanh)
+        #Also learn logst of actor
         self.actor_logstd = nn.Parameter(torch.full(size=(action_dim,), fill_value=0.))
         
-        # Critic network (outputs value estimate)
         self.critic = MLP(obs_dim+latent_size, 1, hidden_dims, activation)
-
 
         self.actor_optim = optim.Adam([*self.actor.parameters(), *self.encoder.parameters(), self.actor_logstd], lr=lr)
         self.critic_optim = optim.Adam(self.critic.parameters(), lr=lr)
 
     def encode(self, obs):
+        """Appends extrinsics to input observation"""
         obs_clone = obs.clone()
         obs_clone = obs_clone * torch.cat([torch.ones_like(obs_clone[..., :-1]), torch.zeros_like(obs_clone[..., -1:])], dim=-1)
 
         z = self.encoder(obs)
 
         return torch.cat([obs_clone, z], dim=-1)
+    
+    @torch.no_grad()
+    def sample_action(self, obs):
+        """Samples an action from the policy"""
+        extended_obs = self.encode(obs)
+        mean = self.actor(extended_obs)
+        action_std = torch.exp(self.actor_logstd)
+        dist = torch.distributions.Normal(mean, action_std)
+        return dist.sample(), {}
 
     @torch.no_grad()
     def act(self, obs):
@@ -51,6 +56,7 @@ class ActorCriticWithEncoder(AdaptivePolicy):
     
     @torch.no_grad()
     def get_value(self, obs):
+        """Returns the critic for current observation + extrinsics"""
         return self.critic(self.encode(obs)).squeeze()
 
     def evaluate(self, obs, acts):
@@ -70,26 +76,3 @@ class ActorCriticWithEncoder(AdaptivePolicy):
         log_probs = dist.log_prob(acts).sum(1)
 
         return values.squeeze(), log_probs, dist.entropy(), true_z, encoded_z
-    
-    def store_savestate(self, checkpoint_path):
-        """
-            Stores the model into the given directory.
-        """
-        checkpoint = {
-            'encoder_state_dict': self.encoder.state_dict(),
-            'actor_state_dict': self.actor.state_dict(),
-            'critic_state_dict': self.critic.state_dict(),
-            'actor_optimizer_state_dict': self.actor_optim.state_dict(),
-            'critic_optimizer_state_dict': self.critic_optim.state_dict()
-        }
-        torch.save(checkpoint, checkpoint_path)
-        print(f"Checkpoint saved at {checkpoint_path}")
-
-    def restore_savestate(self, checkpoint_path):
-        checkpoint = torch.load(checkpoint_path)
-        self.encoder.load_state_dict(checkpoint['encoder_state_dict'])
-        self.actor.load_state_dict(checkpoint['actor_state_dict'])
-        self.critic.load_state_dict(checkpoint['critic_state_dict'])
-        self.actor_optim.load_state_dict(checkpoint['actor_optimizer_state_dict'])
-        self.critic_optim.load_state_dict(checkpoint['critic_optimizer_state_dict'])
-        print(f"Checkpoint restored from {checkpoint_path}")

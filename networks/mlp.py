@@ -1,27 +1,4 @@
-import torch
 from torch import nn
-import torch.nn.functional as F
-
-class Encoder(nn.Module):
-    """ Actor State Encoder. """
-
-    def __init__(self, state_size, latent_size, fc1_units=128, fc2_units=64):
-        """
-            Initialize parameters and build model.
-
-        """
-        super(Encoder, self).__init__()
-        self.fc1 = nn.Linear(state_size, fc1_units)
-        self.fc2 = nn.Linear(fc1_units, fc2_units)
-        self.fc3 = nn.Linear(fc2_units, latent_size)
-
-    def forward(self, state):
-        """
-            Build a network that maps state -> latent representation.
-        """
-        x = F.relu(self.fc1(state))
-        x = F.relu(self.fc2(x))
-        return self.fc3(x)
 
 class MLP(nn.Module):
     """ Fully connected feedforward network with a hidden layer. """
@@ -47,6 +24,11 @@ class MLP(nn.Module):
         return self.model(x)
     
 class DummyEncoder(nn.Module):
+    """
+    Encoder that maps (x1, ..., xn) -> xn
+
+    Used for training against real disturbance value without having to change the ppo algorithm
+    """
     def __init__(self, **args):
         super(DummyEncoder, self).__init__()
     
@@ -69,15 +51,13 @@ class LSTM(nn.Module):
         """
         super(LSTM, self).__init__()
 
-        # LSTM layer
         self.lstm = nn.LSTM(
             input_size=input_dim,
-            hidden_size=hidden_dims[0],  # Use the first hidden dimension for LSTM
+            hidden_size=hidden_dims[0],  # Use the first hidden dimension for LSTM for compatibility with other encoder classes
             num_layers=num_layers,
             batch_first=batch_first
         )
 
-        # Fully connected layer to map LSTM output to the desired output dimension
         self.fc = nn.Linear(hidden_dims[0], output_dim)
 
     def forward(self, x, hidden):
@@ -93,10 +73,7 @@ class LSTM(nn.Module):
         if len(x.shape) == 2:
             x = x.unsqueeze(1)
 
-        # Pass through LSTM
-        lstm_out, (h_n, c_n) = self.lstm(x, hidden)  # lstm_out shape: (batch_size, seq_len, hidden_size)
-
-        # Map to output dimension
-        output = self.fc(lstm_out)  # Shape: (batch_size, output_dim)
+        lstm_out, (h_n, c_n) = self.lstm(x, hidden)
+        output = self.fc(lstm_out)  
 
         return output, h_n, c_n

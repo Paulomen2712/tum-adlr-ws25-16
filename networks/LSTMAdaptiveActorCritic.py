@@ -1,11 +1,8 @@
 import torch
 from torch import nn
 import torch.optim as optim
-from networks.mlp import MLP, LSTM
+from networks.mlp import LSTM
 import copy
-from collections import deque
-from networks.policy import AdaptivePolicy
-from torch.distributions import MultivariateNormal
 
 class LSTMAdaptiveActorCritic(nn.Module):
     def __init__(self, obs_dim, action_dim, latent_size=1, encoder_hidden_dims=[64, 32], num_layers = 1, lr=1e-5, std=0.5, history_len=10, activation =None):
@@ -39,6 +36,7 @@ class LSTMAdaptiveActorCritic(nn.Module):
         self.actor_logstd = None
 
     def clear_history(self, indexes = None):
+        """Resets hidden states."""
         if indexes is None:
             self.h = (torch.zeros_like(self.h))
             self.c = (torch.zeros_like(self.c))
@@ -49,6 +47,7 @@ class LSTMAdaptiveActorCritic(nn.Module):
         self.prev_action[indexes]  = 0
 
     def set_policy(self, policy):
+        """Sets the policy to a frozen copy of a trained one"""
         self.actor = copy.deepcopy(policy.actor)
         for param in self.actor.parameters():
             param.requires_grad = False
@@ -59,14 +58,8 @@ class LSTMAdaptiveActorCritic(nn.Module):
         """
         Encode the observation and action history using the LSTM encoder.
         Apply masking to the observation before appending it to the history.
-        
-        Args:
-            obs: Current observation tensor of shape (batch_size, obs_dim).
-        
-        Returns:
-            Concatenated tensor of the masked observation and the encoded history.
         """
-        if self.h.shape[0] != obs.shape[0]:
+        if self.h.shape[:-1] != obs.shape[:-1]:
             #size missmatch means new setting -> reset hidden states
             self.h = torch.zeros((1, obs.shape[0], self.hidden_shape)).to(obs.device)
             self.c = torch.zeros((1, obs.shape[0], self.hidden_shape)).to(obs.device)
@@ -77,7 +70,7 @@ class LSTMAdaptiveActorCritic(nn.Module):
         if action is None:
             action = self.prev_action = torch.zeros((*obs.shape[0:-1], self.action_dim)).to(obs.device)
         # Pass through LSTM encoder
-        z, h_n, c_n = self.encoder(torch.cat([obs_clone, action], dim=-1), (self.h.to(obs.device), self.c.to(obs.device)))  # Shape: (batch_size, latent_size)
+        z, h_n, c_n = self.encoder(torch.cat([obs_clone, action], dim=-1), (self.h.to(obs.device), self.c.to(obs.device)))
         self.h = h_n
         self.c = c_n
         # Return the concatenated masked observation and encoded history
@@ -85,6 +78,7 @@ class LSTMAdaptiveActorCritic(nn.Module):
 
     @torch.no_grad
     def sample_action(self, obs):
+        """Samples an action. Also returns encoded extrinsics"""
         obs = obs.unsqueeze(1)
         ext_obs = self.encode(obs).squeeze(1)
         mean = self.actor(ext_obs)

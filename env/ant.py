@@ -171,6 +171,8 @@ class AntEnv(MujocoEnv, utils.EzPickle):
     * v2: All continuous control environments now use mujoco_py >= 1.50
     * v1: max_time_steps raised to 1000 for robot based tasks. Added reward_threshold to environments.
     * v0: Initial versions release (1.0.0)
+
+    Copied from https://github.com/openai/gym/blob/master/gym/envs/mujoco/ant_v4.py for backwards compatibility
     """
 
     metadata = {

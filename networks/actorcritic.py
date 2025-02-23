@@ -1,7 +1,6 @@
 import torch
 from torch import nn
 import torch.optim as optim
-from torch.distributions import MultivariateNormal
 from networks.mlp import MLP
 class ActorCritic(nn.Module):
     """ Actor Critic Model."""
@@ -12,35 +11,30 @@ class ActorCritic(nn.Module):
         """
         super(ActorCritic, self).__init__()
         
-        # Actor network (outputs probabilities for possible actions)
+        # Actor network (outputs action mean)
         self.actor = MLP(obs_dim, action_dim, hidden_dims,activation, last_activation = nn.Tanh)
         
-        # Critic network (outputs value estimate)
         self.critic = MLP(obs_dim, 1, hidden_dims, activation)
 
+        #Also learn logst of actor
         self.actor_logstd = nn.Parameter(torch.full(size=(action_dim,), fill_value=std))
 
         self.actor_optim = optim.Adam(list(self.actor.parameters()) + [self.actor_logstd], lr=lr)
         self.critic_optim = optim.Adam(self.critic.parameters(), lr=lr)
 
-        # self.actor_scheduler= optim.lr_scheduler.StepLR(self.actor_optim, step_size = 1, gamma=gamma)
-        # self.critic_scheduler= optim.lr_scheduler.StepLR(self.critic_optim, step_size = 1, gamma=gamma)
-        scheduler_lambda = lambda epoch: gamma ** epoch
-        self.actor_scheduler= optim.lr_scheduler.LambdaLR(self.actor_optim, lr_lambda=scheduler_lambda)
-        self.critic_scheduler= optim.lr_scheduler.LambdaLR(self.critic_optim, lr_lambda=scheduler_lambda)
-
 
     @torch.no_grad()
     def sample_action(self, obs):
+        """Samples an action from the policy"""
         mean = self.actor(obs)
         action_std = torch.exp(self.actor_logstd)
         dist = torch.distributions.Normal(mean, action_std)
-        return dist.sample()
+        return dist.sample(), {}
 
     @torch.no_grad()
     def act(self, obs):
         """
-            Samples an action from the actor/critic network.
+            Samples an action from the actor network, it's corresponding critic and returns them along with it's log probability.
         """
         mean, values = self.actor(obs), self.critic(obs)
         action_std = torch.exp(self.actor_logstd)
@@ -52,12 +46,13 @@ class ActorCritic(nn.Module):
     
     @torch.no_grad()
     def get_value(self, obs):
+        """Returns the critic for current observation"""
         return self.critic(obs).squeeze()
 
     def evaluate(self, obs, acts):
         """
             Estimates the values of each observation, and the log probs of
-            each action given the batch observations and actions. 
+            each action given the batch observations and actions, and the entropy. 
         """
         mean, values = self.actor(obs), self.critic(obs)
         action_std = torch.exp(self.actor_logstd)

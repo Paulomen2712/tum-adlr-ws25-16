@@ -10,7 +10,7 @@ from utils.storage import Storage
 
 
 class PPO:
-    """PPO Algorithm Implementation."""
+    """PPO Algorithm Implementation. Only trains base policy, which can include Object Prop Encoder"""
 
     def __init__(self, summary_writter=None, env = LunarContinuous, policy_class = ActorCritic, activation=nn.ReLU, env_args={}, **hyperparameters):
         """
@@ -35,28 +35,25 @@ class PPO:
         # Initialize optimizers for actor and critic
         self.actor_optim = self.policy.actor_optim  
         self.critic_optim = self.policy.critic_optim
-
-        self.actor_scheduler = self.policy.actor_scheduler
-        self.critic_scheduler = self.policy.critic_scheduler
         
         self.policy.to(self.device)
 
         self.logger = {
 			'delta_t': time.time_ns(),
 			'i_so_far': 0,          # iterations simulated so far
-			'batch_rews': 0,       # episodic returns in current batch
-            'rollout_compute': 0,
-            'grad_compute': 0,
+			'batch_rews': 0,        # episodic returns in current batch
+            'rollout_compute': 0,   # compute required for a rollout
+            'grad_compute': 0,      # compute required for the total gradient update process
 			'actor_losses': [],     # losses of actor network in current batch
-            'val_rew': None,
-            'val_dur': None,
-            'kls': [],
-            'lr': self.lr           # current learning rate
+            'val_rew': None,        # current training time validation rewards
+            'val_dur': None,        # current training time validation duration
+            'kls': [],              # kl divergence of actor network in current batch
+            'lr': self.lr,          # current learning rate
 		}
 
     def train(self):
         """
-            Train the actor/critic network.
+            Train the base policy.
         """
         self.policy.train()
         self.logger['delta_t'] = time.time_ns()
@@ -134,13 +131,6 @@ class PPO:
     def rollout(self):
         """
             Collects batch of simulated data.
-
-            Return:
-                batch_obs: the observations collected this batch. Shape: (number of timesteps, dimension of observation)
-                batch_acts: the actions collected this batch. Shape: (number of timesteps, dimension of action)
-                batch_log_probs: the log probabilities of each action taken this batch. Shape: (number of timesteps)
-                batch_lens: the lengths of each episode this batch. Shape: (number of episodes)
-                batch_advantages: the advantages collected from this batchShape: (number of timesteps)
         """
         self.storage.clear()
 
@@ -156,6 +146,7 @@ class PPO:
         return self.storage.get_rollot_data()
 
     def update_actor(self, pred_log_probs, log_probs, advantages):
+        """Performs ppo gradient step of the actor module. Also returns an estimate for the current KL divergence"""
         log_ratios = pred_log_probs - log_probs
         ratios = torch.exp(log_ratios)
         surr1 = -ratios * advantages
@@ -173,6 +164,7 @@ class PPO:
         return actor_loss.detach(), kl
 
     def update_critic(self,  values, returns):
+        """Performs gradient step of the critic module"""
         critic_loss = nn.MSELoss()(values, returns)
         
         self.critic_optim.zero_grad()
@@ -182,11 +174,13 @@ class PPO:
         self.critic_optim.step()
 
     def restore_savestate(self, checkpoint):
+        """Loads policy from savestate"""
         model = ActorCritic(self.obs_dim, self.act_dim)
         model.load_state_dict(torch.load(checkpoint))
         self.policy = model
 
     def validate(self, val_iter, should_record=False):
+        """Runs for a set ammount the policy simulations and returns mean rewards and mean timesteps. If should_record=True stores videos locally"""
         if should_record:
             env = self.env_class(num_envs=val_iter,should_record='True',**self.env_args)
         else:
@@ -201,7 +195,7 @@ class PPO:
             t_sim+=1
             not_done = np.array([1]*val_iter, dtype=float) - done
             t += not_done
-            action = self.policy.sample_action(torch.Tensor(obs).to(self.device))
+            action, _ = self.policy.sample_action(torch.Tensor(obs).to(self.device))
             obs, rew, next_done = env.step(action.cpu().numpy())
             ep_ret += rew * not_done
             done |= next_done
@@ -209,42 +203,40 @@ class PPO:
         return np.mean(ep_ret),  np.mean(t)
 
     def test(self):
+        """Runs endlessly the policy simulations. These runs are rendered"""
         self.policy.cpu()
         env = self.env_class(num_envs=1,render_mode='human',**self.env_args)
         while True:
                 obs, done = env.reset()
                 t = 1
                 while not done[0]:
-                    action = self.policy.sample_action(torch.Tensor(obs))
+                    action, _ = self.policy.sample_action(torch.Tensor(obs))
                     obs, _, done = env.step(action.numpy())
                     t+=1
-
 
     def _init_hyperparameters(self, hyperparameters):
         """
             Initialize default and custom values for hyperparameters
         """
-
+        #idea log hyperparameters from yaml config, but they can still be overriden by specifying on creation
         config_hyperparameters = self.env.load_hyperparameters()
         for param, val in config_hyperparameters.items():
             setattr(self, param, val)
 
         for param, val in hyperparameters.items():
             exec('self.' + param + ' = ' + str(val))
-        self.base_train_it = self.total_base_train_steps // (self.num_envs * self.num_steps)
-        if self.seed != None:
-            assert(type(self.seed) == int)
 
-            torch.manual_seed(self.seed)
-            print(f"Successfully set seed to {self.seed}")
+        self.base_train_it = self.total_base_train_steps // (self.num_envs * self.num_steps)
 
     def _get_save_path(self, iteration):
+        """Returns the path to store the current checkpoint"""
         if self.summary_writter is None:
             return f'./ppo_checkpoints/non_wandb/ppo_policy_{iteration}.pth'
         else:
             return f'./ppo_checkpoints/{wandb.run.name}/ppo_policy_{iteration}.pth'
 
     def _log_summary(self):
+        """Prints summary of the current base policy training epoch to std out and logs to wandb"""
         lr = self.logger['lr']
         delta_t = self.logger['delta_t']
         self.logger['delta_t'] = time.time_ns()

@@ -15,6 +15,7 @@ VIEWPORT_H = 400
 class LunarLanderWithWind(LunarLander):
     """
         Custom LunarLander environment with wind turbulence.
+        Adapted from https://github.com/openai/gym/blob/master/gym/envs/box2d/lunar_lander.py
     """
 
     def __init__(self, min_wind_power = 15., max_wind_power=50., render_mode=None, wind_power=15):
@@ -68,9 +69,6 @@ class LunarLanderWithWind(LunarLander):
         return self.wind_power
 
     def step(self, action):
-        """
-            Copied from https://github.com/openai/gym/blob/master/gym/envs/box2d/lunar_lander.py with minor adjustments
-        """
         assert self.lander is not None, "You forgot to call reset()"
 
         if self.enable_wind and not (
